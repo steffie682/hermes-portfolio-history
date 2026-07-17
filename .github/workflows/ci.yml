@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run audit:prod
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - name: Verify migration files are current
+        run: |
+          npm run db:generate
+          git status --porcelain --untracked-files=all -- drizzle | tee /tmp/drizzle-status
+          test ! -s /tmp/drizzle-status
+      - run: npm run build
