@@ -1,0 +1,54 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.token
+
+# User financial data and imported documents
+data/
+uploads/
+imports/
+originals/
+backups/
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.pdf
+*.ofx
+*.qfx
+
+# Logs, sessions, caches
+logs/
+*.log
+sessions/
+.cache/
+.tmp/
+tmp/
+
+# Dependencies and build output
+node_modules/
+.next/
+dist/
+build/
+coverage/
+.playwright/
+
+# Local databases and object storage
+*.db
+*.sqlite
+*.sqlite3
+storage/
+minio-data/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Hermes local state
+.hermes/

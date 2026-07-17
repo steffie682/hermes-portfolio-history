@@ -1,0 +1,24 @@
+name: Bug report
+description: 実装済み機能の不具合を報告する
+title: "bug: "
+labels: ["type: bug", "status: triage"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 不具合
+      description: 個人情報・金融原本・tokenは貼らないでください。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 再現手順
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待する動作
+    validations:
+      required: true
