@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { getProjectStatus } from '@/lib/project-status';
 
 export default function HomePage() {
@@ -16,6 +17,9 @@ export default function HomePage() {
           <div><dt>開発段階</dt><dd>{status.stage}</dd></div>
           <div><dt>実装済み機能</dt><dd>{status.implementedFeatures.length}件</dd></div>
         </dl>
+        <Link className="login-link" href="/login">
+          Passkeyでログイン
+        </Link>
       </section>
     </main>
   );

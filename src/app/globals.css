@@ -11,3 +11,60 @@ dl { border-top: 1px solid #dfe1e5; margin: 0; }
 dl div { display: flex; justify-content: space-between; gap: 24px; border-bottom: 1px solid #dfe1e5; padding: 14px 0; }
 dt { color: #5f6368; }
 dd { margin: 0; font-weight: 650; }
+
+
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(circle at top, #e6f4ff, #f7f9fc 48%);
+}
+
+.auth-card {
+  width: min(100%, 440px);
+  display: grid;
+  gap: 14px;
+  padding: 32px;
+  border: 1px solid #dce3ed;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 24px 70px rgba(20, 42, 74, 0.12);
+}
+
+.auth-card h1,
+.auth-card p { margin: 0; }
+.auth-card label { font-weight: 700; }
+.auth-card input,
+.auth-card button {
+  min-height: 48px;
+  border-radius: 12px;
+  font: inherit;
+}
+.auth-card input { border: 1px solid #aeb9c8; padding: 0 14px; }
+.auth-card button {
+  border: 0;
+  padding: 0 18px;
+  color: white;
+  background: #1769aa;
+  font-weight: 800;
+  cursor: pointer;
+}
+.auth-card button:disabled { opacity: 0.45; cursor: not-allowed; }
+.eyebrow { color: #1769aa; font-size: 0.75rem; font-weight: 900; letter-spacing: 0.12em; }
+.divider { display: flex; align-items: center; gap: 10px; color: #64748b; font-size: 0.85rem; }
+.divider::before,
+.divider::after { content: ''; flex: 1; height: 1px; background: #dce3ed; }
+
+
+.login-link {
+  display: inline-block;
+  margin-top: 1.25rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.65rem;
+  background: #0f766e;
+  color: white;
+  font-weight: 700;
+  text-decoration: none;
+}
+.login-link:hover { background: #115e59; }

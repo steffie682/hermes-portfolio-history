@@ -1,16 +1,12 @@
-import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { describe, expect, it } from 'vitest';
+import { applyAllMigrations } from './helpers/migrations';
 
 describe('initial migration', () => {
   it('applies cleanly with the expected app_metadata constraints', async () => {
     const db = new PGlite();
     try {
-      const sql = await readFile(
-        'drizzle/20260717112017_narrow_liz_osborn/migration.sql',
-        'utf8',
-      );
-      await db.exec(sql);
+      await applyAllMigrations(db);
 
       const columns = await db.query<{
         column_name: string;
@@ -45,6 +41,18 @@ describe('initial migration', () => {
            and tc.constraint_type = 'PRIMARY KEY'`,
       );
       expect(primaryKey.rows).toEqual([{ column_name: 'key' }]);
+
+      const authTables = await db.query<{ table_name: string }>(
+        `select table_name from information_schema.tables
+         where table_schema = 'public'
+           and table_name in ('auth_challenges', 'auth_sessions', 'passkey_credentials')
+         order by table_name`,
+      );
+      expect(authTables.rows).toEqual([
+        { table_name: 'auth_challenges' },
+        { table_name: 'auth_sessions' },
+        { table_name: 'passkey_credentials' },
+      ]);
     } finally {
       await db.close();
     }

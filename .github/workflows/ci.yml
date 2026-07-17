@@ -25,6 +25,7 @@ jobs:
       - run: npm test
       - name: Verify migration files are current
         run: |
+          set -o pipefail
           npm run db:generate
           git status --porcelain --untracked-files=all -- drizzle | tee /tmp/drizzle-status
           test ! -s /tmp/drizzle-status
