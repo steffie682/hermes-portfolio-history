@@ -1,17 +1,11 @@
 import {
   classifySbiTransactionType,
   type SbiPostingSupport,
-  type SbiTransactionClassification,
 } from './trade-classification';
 
 export interface SbiPreviewSourceRow {
   sourceRowNumber: number;
   transactionType: string;
-}
-
-export interface SbiImportPreviewRow extends SbiPreviewSourceRow {
-  classification: SbiTransactionClassification;
-  support: SbiPostingSupport;
 }
 
 export interface SbiImportPreview {
@@ -20,7 +14,6 @@ export interface SbiImportPreview {
   deferredRows: number;
   hasDeferredRows: boolean;
   supportCounts: Record<SbiPostingSupport, number>;
-  rows: SbiImportPreviewRow[];
 }
 
 export function buildSbiImportPreview(sourceRows: SbiPreviewSourceRow[]): SbiImportPreview {
@@ -30,24 +23,17 @@ export function buildSbiImportPreview(sourceRows: SbiPreviewSourceRow[]): SbiImp
     'needs-distribution-details': 0,
     'needs-review': 0,
   };
-  const rows = sourceRows.map((sourceRow) => {
+  for (const sourceRow of sourceRows) {
     const classification = classifySbiTransactionType(sourceRow.transactionType);
     supportCounts[classification.support] += 1;
-    return {
-      sourceRowNumber: sourceRow.sourceRowNumber,
-      transactionType: sourceRow.transactionType,
-      classification,
-      support: classification.support,
-    };
-  });
+  }
   const automaticRows = supportCounts.ready;
-  const deferredRows = rows.length - automaticRows;
+  const deferredRows = sourceRows.length - automaticRows;
   return {
-    totalRows: rows.length,
+    totalRows: sourceRows.length,
     automaticRows,
     deferredRows,
     hasDeferredRows: deferredRows > 0,
     supportCounts,
-    rows,
   };
 }

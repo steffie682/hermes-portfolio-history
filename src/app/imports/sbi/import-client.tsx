@@ -3,6 +3,7 @@
 import { useRef, useState, type ChangeEvent } from 'react';
 import { buildSbiImportPreview, type SbiImportPreview } from '@/import/sbi/import-preview';
 import { parseSbiTradeHistory } from '@/import/sbi/trade-history';
+import { assessSbiCashTradeRows } from '@/import/sbi/cash-trade-event';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
@@ -16,6 +17,7 @@ function safeErrorMessage(error: unknown) {
 export default function SbiImportClient() {
   const operationVersion = useRef(0);
   const [preview, setPreview] = useState<SbiImportPreview | null>(null);
+  const [cashAssessment, setCashAssessment] = useState<ReturnType<typeof assessSbiCashTradeRows> | null>(null);
   const [status, setStatus] = useState<string>('');
   const [error, setError] = useState<string>('');
 
@@ -23,6 +25,7 @@ export default function SbiImportClient() {
     const version = ++operationVersion.current;
     const file = event.currentTarget.files?.[0];
     setPreview(null);
+    setCashAssessment(null);
     setError('');
     setStatus('');
     if (!file) return;
@@ -36,8 +39,10 @@ export default function SbiImportClient() {
       if (version !== operationVersion.current) return;
       const parsed = parseSbiTradeHistory(new Uint8Array(buffer));
       const nextPreview = buildSbiImportPreview(parsed.rows);
+      const nextCashAssessment = assessSbiCashTradeRows(parsed.rows);
       if (version !== operationVersion.current) return;
       setPreview(nextPreview);
+      setCashAssessment(nextCashAssessment);
       setStatus(`取引 ${nextPreview.totalRows}件`);
     } catch (caught) {
       if (version !== operationVersion.current) return;
@@ -79,6 +84,13 @@ export default function SbiImportClient() {
               <strong>種類の確認待ち {preview.supportCounts['needs-review']}件</strong>
             </article>
           </div>
+          {cashAssessment && cashAssessment.cashCandidateRows > 0 ? (
+            <div className="cash-readiness" aria-label="現物・投信の台帳準備">
+              <strong>{`現物・投信の台帳準備 ${cashAssessment.readyRows} / ${cashAssessment.cashCandidateRows}件`}</strong>
+              {cashAssessment.needsReviewRows > 0 ? <p>{`金額確認が必要な行 ${cashAssessment.needsReviewRows}件`}</p> : null}
+              {cashAssessment.requiresOpeningCheckpoint ? <p>開始時点の保有残高が必要です</p> : null}
+            </div>
+          ) : null}
           {preview.totalRows === 0 ? (
             <div className="import-warning" role="alert">
               <strong>CSVに取引がありません</strong>

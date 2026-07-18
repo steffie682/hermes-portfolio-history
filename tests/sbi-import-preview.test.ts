@@ -10,16 +10,12 @@ describe('SBI staged import preview', () => {
       quantity: '999999',
       unitPrice: '888888',
     };
-    const [row] = buildSbiImportPreview([source]).rows;
-    expect(row).toEqual({
-      sourceRowNumber: 6,
-      transactionType: '株式現物買',
-      classification: expect.objectContaining({ support: 'ready' }),
-      support: 'ready',
-    });
-    expect(JSON.stringify(row)).not.toContain('SECRET_SECURITY');
-    expect(JSON.stringify(row)).not.toContain('999999');
-    expect(JSON.stringify(row)).not.toContain('888888');
+    const preview = buildSbiImportPreview([source]);
+    expect(preview).not.toHaveProperty('rows');
+    const serialized = JSON.stringify(preview);
+    for (const secret of ['株式現物買', 'SECRET_SECURITY', '999999', '888888']) {
+      expect(serialized).not.toContain(secret);
+    }
   });
   it('separates automatically supported and deferred rows without dropping either', () => {
     const preview = buildSbiImportPreview([
@@ -37,14 +33,6 @@ describe('SBI staged import preview', () => {
       deferredRows: 4,
       hasDeferredRows: true,
     });
-    expect(preview.rows.map(({ sourceRowNumber, support }) => [sourceRowNumber, support])).toEqual([
-      [6, 'ready'],
-      [7, 'ready'],
-      [8, 'needs-margin-ledger'],
-      [9, 'needs-margin-ledger'],
-      [10, 'needs-distribution-details'],
-      [11, 'needs-review'],
-    ]);
     expect(preview.supportCounts).toEqual({
       ready: 2,
       'needs-margin-ledger': 2,

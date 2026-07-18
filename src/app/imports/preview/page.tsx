@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { buildSbiImportPreview } from '@/import/sbi/import-preview';
+import { classifySbiTransactionType } from '@/import/sbi/trade-classification';
 
 export const metadata: Metadata = {
   title: 'CSV取込の確認（画面見本）',
@@ -54,12 +55,15 @@ export default function ImportPreviewPage() {
             <table className="import-table">
               <thead><tr><th scope="col">取引種類</th><th scope="col">現在の扱い</th></tr></thead>
               <tbody>
-                {preview.rows.map((row) => (
-                  <tr key={row.transactionType}>
-                    <td>{row.transactionType}</td>
-                    <td>{supportCopy[row.support].label}</td>
-                  </tr>
-                ))}
+                {syntheticRows.map((row) => {
+                  const support = classifySbiTransactionType(row.transactionType).support;
+                  return (
+                    <tr key={row.transactionType}>
+                      <td>{row.transactionType}</td>
+                      <td>{supportCopy[support].label}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
