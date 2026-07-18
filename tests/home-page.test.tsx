@@ -7,5 +7,8 @@ describe('HomePage', () => {
     render(<HomePage />);
     expect(screen.getByRole('heading', { name: '資産履歴管理' })).toBeTruthy();
     expect(screen.getByText('基盤を構築中です')).toBeTruthy();
+    expect(
+      screen.getByRole('link', { name: 'ログイン・利用開始' }).getAttribute('href'),
+    ).toBe('/login');
   });
 });

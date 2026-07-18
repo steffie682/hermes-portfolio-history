@@ -18,7 +18,7 @@ export default function HomePage() {
           <div><dt>実装済み機能</dt><dd>{status.implementedFeatures.length}件</dd></div>
         </dl>
         <Link className="login-link" href="/login">
-          Passkeyでログイン
+          ログイン・利用開始
         </Link>
       </section>
     </main>
