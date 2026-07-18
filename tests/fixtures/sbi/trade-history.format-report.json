@@ -178,5 +178,39 @@
       "maximumLength": 7
     }
   ],
-  "containsSourceValues": false
+  "retainsSourceHeaders": true,
+  "retainsApprovedCategoryValues": true,
+  "categorySchema": "sbi-trade-history-v1",
+  "safeCategoryValues": {
+    "取引": [
+      "株式現物買",
+      "株式現物売",
+      "現引",
+      "信用新規買",
+      "信用新規売",
+      "信用返済買",
+      "信用返済売",
+      "投信金額解約",
+      "投信金額買付",
+      "投信金額買付(募集)",
+      "分配金再投資"
+    ],
+    "期限": [
+      "--",
+      "6ヶ月",
+      "日計りH",
+      "無期限"
+    ],
+    "預り": [
+      "NISA(つ)",
+      "NISA(成)",
+      "特定",
+      "特定/一般"
+    ],
+    "課税": [
+      "--",
+      "申告",
+      "非課税"
+    ]
+  }
 }
