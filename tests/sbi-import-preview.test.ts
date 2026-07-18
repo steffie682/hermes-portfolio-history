@@ -2,6 +2,25 @@ import { describe, expect, it } from 'vitest';
 import { buildSbiImportPreview } from '@/import/sbi/import-preview';
 
 describe('SBI staged import preview', () => {
+  it('does not retain unrelated financial fields from parsed source rows', () => {
+    const source = {
+      sourceRowNumber: 6,
+      transactionType: '株式現物買',
+      securityName: 'SECRET_SECURITY',
+      quantity: '999999',
+      unitPrice: '888888',
+    };
+    const [row] = buildSbiImportPreview([source]).rows;
+    expect(row).toEqual({
+      sourceRowNumber: 6,
+      transactionType: '株式現物買',
+      classification: expect.objectContaining({ support: 'ready' }),
+      support: 'ready',
+    });
+    expect(JSON.stringify(row)).not.toContain('SECRET_SECURITY');
+    expect(JSON.stringify(row)).not.toContain('999999');
+    expect(JSON.stringify(row)).not.toContain('888888');
+  });
   it('separates automatically supported and deferred rows without dropping either', () => {
     const preview = buildSbiImportPreview([
       { sourceRowNumber: 6, transactionType: '株式現物買' },

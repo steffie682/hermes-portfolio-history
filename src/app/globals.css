@@ -95,3 +95,13 @@ dd { margin: 0; font-weight: 650; }
 .import-confirm { width: 100%; min-height: 50px; border: 0; border-radius: 12px; color: #fff; background: #236d56; font: inherit; font-weight: 800; }
 .import-confirm:disabled { opacity: .45; cursor: not-allowed; }
 @media (max-width: 640px) { .import-summary { grid-template-columns: 1fr; } .import-shell { padding: 16px 10px; } .import-card { border-radius: 18px; } }
+
+.import-file-panel { display: grid; gap: 10px; margin-top: 24px; padding: 20px; border: 1px solid #dbe6e1; border-radius: 16px; background: #f7faf8; }
+.import-file-panel label { font-weight: 800; }
+.import-file-panel input { max-width: 100%; font: inherit; }
+.import-file-panel strong { color: #145c45; }
+.import-file-panel p { margin: 0; color: #58645f; line-height: 1.6; }
+.import-live-status { margin: 18px 0; font-weight: 800; }
+.import-error { margin-top: 18px; padding: 16px; border-left: 5px solid #b42318; border-radius: 10px; color: #7a271a; background: #fef3f2; line-height: 1.6; }
+.actual-import-preview { margin-top: 28px; }
+.import-ready-message { padding: 16px; border-radius: 10px; color: #145c45; background: #eaf8f2; font-weight: 700; }

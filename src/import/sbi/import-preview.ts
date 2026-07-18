@@ -34,7 +34,8 @@ export function buildSbiImportPreview(sourceRows: SbiPreviewSourceRow[]): SbiImp
     const classification = classifySbiTransactionType(sourceRow.transactionType);
     supportCounts[classification.support] += 1;
     return {
-      ...sourceRow,
+      sourceRowNumber: sourceRow.sourceRowNumber,
+      transactionType: sourceRow.transactionType,
       classification,
       support: classification.support,
     };
