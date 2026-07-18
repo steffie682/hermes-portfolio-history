@@ -1,0 +1,182 @@
+{
+  "formatVersion": 1,
+  "documentKind": "csv-structure-only",
+  "encoding": "shift_jis",
+  "delimiter": "comma",
+  "headerRowNumber": 5,
+  "rowCount": 2630,
+  "columnCount": 14,
+  "headers": [
+    "約定日",
+    "銘柄",
+    "銘柄コード",
+    "市場",
+    "取引",
+    "期限",
+    "預り",
+    "課税",
+    "約定数量",
+    "約定単価",
+    "手数料/諸経費等",
+    "税額",
+    "受渡日",
+    "受渡金額/決済損益"
+  ],
+  "columns": [
+    {
+      "header": "約定日",
+      "patterns": {
+        "empty": 0,
+        "date": 2630,
+        "number": 0,
+        "percent": 0,
+        "text": 0
+      },
+      "maximumLength": 10
+    },
+    {
+      "header": "銘柄",
+      "patterns": {
+        "empty": 0,
+        "date": 0,
+        "number": 0,
+        "percent": 0,
+        "text": 2630
+      },
+      "maximumLength": 30
+    },
+    {
+      "header": "銘柄コード",
+      "patterns": {
+        "empty": 1560,
+        "date": 0,
+        "number": 937,
+        "percent": 0,
+        "text": 133
+      },
+      "maximumLength": 4
+    },
+    {
+      "header": "市場",
+      "patterns": {
+        "empty": 1560,
+        "date": 0,
+        "number": 0,
+        "percent": 0,
+        "text": 1070
+      },
+      "maximumLength": 6
+    },
+    {
+      "header": "取引",
+      "patterns": {
+        "empty": 0,
+        "date": 0,
+        "number": 0,
+        "percent": 0,
+        "text": 2630
+      },
+      "maximumLength": 10
+    },
+    {
+      "header": "期限",
+      "patterns": {
+        "empty": 0,
+        "date": 0,
+        "number": 0,
+        "percent": 0,
+        "text": 2630
+      },
+      "maximumLength": 4
+    },
+    {
+      "header": "預り",
+      "patterns": {
+        "empty": 0,
+        "date": 0,
+        "number": 0,
+        "percent": 0,
+        "text": 2630
+      },
+      "maximumLength": 9
+    },
+    {
+      "header": "課税",
+      "patterns": {
+        "empty": 0,
+        "date": 0,
+        "number": 0,
+        "percent": 0,
+        "text": 2630
+      },
+      "maximumLength": 3
+    },
+    {
+      "header": "約定数量",
+      "patterns": {
+        "empty": 0,
+        "date": 0,
+        "number": 2630,
+        "percent": 0,
+        "text": 0
+      },
+      "maximumLength": 6
+    },
+    {
+      "header": "約定単価",
+      "patterns": {
+        "empty": 0,
+        "date": 0,
+        "number": 2630,
+        "percent": 0,
+        "text": 0
+      },
+      "maximumLength": 7
+    },
+    {
+      "header": "手数料/諸経費等",
+      "patterns": {
+        "empty": 0,
+        "date": 0,
+        "number": 469,
+        "percent": 0,
+        "text": 2161
+      },
+      "maximumLength": 5
+    },
+    {
+      "header": "税額",
+      "patterns": {
+        "empty": 0,
+        "date": 0,
+        "number": 0,
+        "percent": 0,
+        "text": 2630
+      },
+      "maximumLength": 2
+    },
+    {
+      "header": "受渡日",
+      "patterns": {
+        "empty": 0,
+        "date": 2630,
+        "number": 0,
+        "percent": 0,
+        "text": 0
+      },
+      "maximumLength": 10
+    },
+    {
+      "header": "受渡金額/決済損益",
+      "patterns": {
+        "empty": 0,
+        "date": 0,
+        "number": 2301,
+        "percent": 0,
+        "text": 329
+      },
+      "maximumLength": 7
+    }
+  ],
+  "containsSourceValues": false
+}
