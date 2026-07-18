@@ -10,7 +10,7 @@ export default function LoginPage() {
   const [message, setMessage] = useState('');
 
   async function register() {
-    setMessage('この端末を登録しています…');
+    setMessage('利用登録を進めています…');
     const optionsResponse = await fetch('/api/auth/passkey/register/options', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -24,7 +24,7 @@ export default function LoginPage() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ response: credential }),
     });
-    if (!verifyResponse.ok) throw new Error('この端末を登録できませんでした');
+    if (!verifyResponse.ok) throw new Error('利用登録できませんでした');
     router.push('/');
     router.refresh();
   }
