@@ -92,6 +92,11 @@ export default function SbiImportClient() {
           ) : (
             <p className="import-ready-message">すべて自動計上候補として確認できました。</p>
           )}
+          {preview.supportCounts['needs-margin-ledger'] > 0 ? (
+            <a className="balance-report-link" href="/imports/sbi/balance-report">
+              取引残高報告書を確認する
+            </a>
+          ) : null}
           <button className="import-confirm" type="button" disabled>取込を確定（まだ利用できません）</button>
         </section>
       ) : null}

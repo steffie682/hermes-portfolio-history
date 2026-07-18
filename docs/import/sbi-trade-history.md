@@ -80,3 +80,19 @@ fixtureには氏名、口座番号、実銘柄、実金額を含めない。
 - 未知の取引名: 値を保持して `needs-review` とし、自動計上しない
 
 この分類は意味を失わないための段階分けであり、現時点ではDB台帳や資産残高へ書き込まない。信用取引と分配金再投資の会計処理を推測しない。
+
+
+## 信用建玉checkpoint用の取引残高報告書
+
+約定履歴CSVだけでは、期間開始前から継続する信用建玉がゼロだったとは証明できない。同日内の信用新規・返済も、約定履歴の行順や日単位純増減だけで建玉対応を確定しない。
+
+`/imports/sbi/balance-report` は認証済み利用者専用の形式確認画面とする。
+
+- PDFは20 MiB以下に制限し、`arrayBuffer()`前に`file.size`を確認する。
+- `%PDF-` magicを確認する。
+- PDF.jsは同一origin workerだけを使い、JavaScript評価を無効化する。
+- `/imports/sbi/:path*` は `connect-src 'none'` とし、外部送信を禁止する。
+- PDF textは処理中のbrowser memoryだけで使い、React state、storage、server、consoleへ保存しない。
+- stateと保存可能なsafe reportには、既知の見出し、値の型、10pt単位へ丸めた配置、page数だけを保持する。
+- 氏名、口座番号、銘柄、銘柄コード、日付値、数量、単価、金額、元filename、hashはsafe reportへ含めない。
+- safe reportは開始・終了建玉checkpoint parserを作るための形式調査用であり、資産残高を確定しない。

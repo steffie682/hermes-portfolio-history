@@ -7,6 +7,7 @@ const importContentSecurityPolicy = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self'",
+  "worker-src 'self'",
   "object-src 'none'",
   "base-uri 'none'",
   "form-action 'none'",
@@ -17,7 +18,7 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        source: '/imports/sbi',
+        source: '/imports/sbi/:path*',
         headers: [
           { key: 'Content-Security-Policy', value: importContentSecurityPolicy },
           { key: 'Referrer-Policy', value: 'no-referrer' },
