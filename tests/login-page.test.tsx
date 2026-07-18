@@ -7,11 +7,20 @@ vi.mock('next/navigation', () => ({
 }));
 
 describe('LoginPage', () => {
-  it('offers passkey sign-in and clearly separates first-time registration', () => {
+  it('explains device authentication without relying on passkey terminology', () => {
     render(<LoginPage />);
-    expect(screen.getByRole('button', { name: 'Passkeyでログイン' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: '顔認証・指紋・PINでログイン' }),
+    ).toBeTruthy();
     expect(screen.getByLabelText('表示名')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Passkeyを作成' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'この端末で利用を始める' }),
+    ).toBeTruthy();
     expect(screen.getByText('初めて使う場合')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'この仕組みにはPasskeyを使用します。パスワードを覚える必要はありません。',
+      ),
+    ).toBeTruthy();
   });
 });

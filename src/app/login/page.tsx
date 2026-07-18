@@ -10,7 +10,7 @@ export default function LoginPage() {
   const [message, setMessage] = useState('');
 
   async function register() {
-    setMessage('Passkeyを登録しています…');
+    setMessage('この端末を登録しています…');
     const optionsResponse = await fetch('/api/auth/passkey/register/options', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -24,13 +24,13 @@ export default function LoginPage() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ response: credential }),
     });
-    if (!verifyResponse.ok) throw new Error('Passkeyを登録できませんでした');
+    if (!verifyResponse.ok) throw new Error('この端末を登録できませんでした');
     router.push('/');
     router.refresh();
   }
 
   async function signIn() {
-    setMessage('Passkeyで確認しています…');
+    setMessage('端末で本人確認しています…');
     const optionsResponse = await fetch('/api/auth/passkey/login/options', {
       method: 'POST',
     });
@@ -62,7 +62,7 @@ export default function LoginPage() {
         <h1>資産履歴管理</h1>
         <p>端末の顔認証・指紋認証・PINを使って安全にログインします。</p>
         <button type="button" onClick={() => void run(signIn)}>
-          Passkeyでログイン
+          顔認証・指紋・PINでログイン
         </button>
         <div className="divider">初めて使う場合</div>
         <label htmlFor="display-name">表示名</label>
@@ -74,8 +74,11 @@ export default function LoginPage() {
           autoComplete="nickname"
         />
         <button type="button" disabled={!name.trim()} onClick={() => void run(register)}>
-          Passkeyを作成
+          この端末で利用を始める
         </button>
+        <p className="auth-note">
+          この仕組みにはPasskeyを使用します。パスワードを覚える必要はありません。
+        </p>
         <p role="status">{message}</p>
       </section>
     </main>
