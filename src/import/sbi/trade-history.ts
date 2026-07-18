@@ -79,6 +79,7 @@ function decodeSource(source: Uint8Array): {
 interface CsvRecord {
   values: string[];
   lineNumber: number;
+  physicalBlank: boolean;
 }
 
 function parseCsv(text: string): CsvRecord[] {
@@ -89,6 +90,7 @@ function parseCsv(text: string): CsvRecord[] {
   let closedQuote = false;
   let physicalLine = 1;
   let recordStartLine = 1;
+  let recordHadSyntax = false;
 
   const finishField = () => {
     row.push(field);
@@ -97,8 +99,9 @@ function parseCsv(text: string): CsvRecord[] {
   };
   const finishRecord = () => {
     finishField();
-    records.push({ values: row, lineNumber: recordStartLine });
+    records.push({ values: row, lineNumber: recordStartLine, physicalBlank: !recordHadSyntax });
     row = [];
+    recordHadSyntax = false;
   };
   const consumeNewline = (textIndex: number): number => {
     const character = text[textIndex];
@@ -109,6 +112,7 @@ function parseCsv(text: string): CsvRecord[] {
 
   for (let index = 0; index < text.length; index += 1) {
     const character = text[index];
+    if (character !== '\n' && character !== '\r') recordHadSyntax = true;
     if (quoted) {
       if (character === '"') {
         if (text[index + 1] === '"') {
@@ -214,7 +218,16 @@ export function parseSbiTradeHistory(source: Uint8Array): ParsedSbiTradeHistory 
     throw new Error('SBI約定履歴CSVに対応する14列の見出しがありません');
   }
 
-  const rows = csvRecords.slice(headerIndex + 1).map((record): SbiTradeHistoryRow => {
+  const dataRecords = csvRecords.slice(headerIndex + 1);
+  let dataEnd = dataRecords.length;
+  while (
+    dataEnd > 0 &&
+    dataRecords[dataEnd - 1].physicalBlank
+  ) {
+    dataEnd -= 1;
+  }
+
+  const rows = dataRecords.slice(0, dataEnd).map((record): SbiTradeHistoryRow => {
     const sourceRowNumber = record.lineNumber;
     const values = record.values;
     if (values.every((value) => value.length === 0)) {

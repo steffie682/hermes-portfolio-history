@@ -122,9 +122,16 @@ describe('SBI trade history parser', () => {
     expect(() => parseSbiTradeHistory(new TextEncoder().encode(csv))).toThrow('6行目');
   });
 
-  it('rejects blank data records and whitespace after closing quotes', () => {
+  it('allows physical blank lines only after the final data record', () => {
     const header = '約定日,銘柄,銘柄コード,市場,取引,期限,預り,課税,約定数量,約定単価,手数料/諸経費等,税額,受渡日,受渡金額/決済損益';
-    expect(() => parseSbiTradeHistory(new TextEncoder().encode(`${header}\n\n`))).toThrow('2行目');
+    const row = '2000/01/01,合成,0000,東証,株式現物買,--,特定,申告,10,1000,--,--,2000/01/03,10000';
+    expect(parseSbiTradeHistory(new TextEncoder().encode(`${header}\n${row}\n\n\n`)).rows).toHaveLength(1);
+    expect(() => parseSbiTradeHistory(new TextEncoder().encode(`${header}\n${row}\n\n${row}`))).toThrow('3行目');
+    expect(() => parseSbiTradeHistory(new TextEncoder().encode(`${header}\n${row}\n""`))).toThrow('3行目');
+  });
+
+  it('rejects whitespace after closing quotes', () => {
+    const header = '約定日,銘柄,銘柄コード,市場,取引,期限,預り,課税,約定数量,約定単価,手数料/諸経費等,税額,受渡日,受渡金額/決済損益';
     expect(() => parseSbiTradeHistory(new TextEncoder().encode(`${header}\n2000/01/01,"合成" ,0000,東証,現物買,当日,特定,課税,10,1000,--,--,2000/01/03,10000`))).toThrow('引用符');
   });
 
