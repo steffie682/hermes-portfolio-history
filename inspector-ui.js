@@ -40,16 +40,39 @@
       rawPreview.append(tr);
     });
   }
+  function clearArtifactConsent() {
+    artifacts = null;
+    confirmed.checked = false;
+    reportButton.disabled = true;
+    fixtureButton.disabled = true;
+  }
   function regenerate() {
+    clearArtifactConsent();
     const index = Number(headerSelect.value);
-    artifacts = window.SbiInspector.buildSafeArtifacts(rows, index, metadata);
     renderRaw(index);
-    byId('summary').textContent = `${artifacts.report.rowCount}データ行・${artifacts.report.columnCount}列／${artifacts.report.encoding}／${artifacts.report.delimiter}`;
-    byId('safe-preview').textContent = artifacts.syntheticCsv.split(/\r?\n/).slice(0, 7).join('\n');
-    confirmed.checked = false; reportButton.disabled = true; fixtureButton.disabled = true;
+    try {
+      const nextArtifacts = window.SbiInspector.buildSafeArtifacts(rows, index, metadata);
+      artifacts = nextArtifacts;
+      byId('summary').textContent = `${artifacts.report.rowCount}データ行・${artifacts.report.columnCount}列／${artifacts.report.encoding}／${artifacts.report.delimiter}`;
+      const categoryLines = Object.entries(artifacts.report.safeCategoryValues)
+        .map(([header, values]) => `${header}: ${values.join('／')}`);
+      byId('safe-preview').textContent = [
+        artifacts.syntheticCsv.split(/\r?\n/).slice(0, 7).join('\n'),
+        '',
+        artifacts.report.categorySchema ? '共有対象の選択肢（重複・件数なし）' : 'SBI約定履歴14列を認識しなかったため、分類値は含めません',
+        ...categoryLines,
+      ].join('\n');
+      return true;
+    } catch (error) {
+      byId('summary').textContent = '安全な出力を生成できませんでした。';
+      byId('safe-preview').textContent = '';
+      message.textContent = error && typeof error.message === 'string' ? error.message : '安全な出力を生成できませんでした。';
+      return false;
+    }
   }
   function reset() {
     rows = []; artifacts = null; pdfReport = null; csvSection.hidden = true; pdfSection.hidden = true;
+    headerSelect.disabled = false;
     confirmed.checked = false; reportButton.disabled = true; fixtureButton.disabled = true;
     byId('pdf-confirmed').checked = false; byId('download-pdf-report').disabled = true;
   }
@@ -71,17 +94,25 @@
       rows = window.SbiInspector.parseCsv(decoded.text, delimiter);
       if (!rows.length || rows.every((row) => row.length < 2)) { message.textContent = '表形式のCSVとして認識できませんでした。'; return; }
       metadata = { encoding: decoded.encoding, delimiter };
-      const selected = likelyHeaderIndex(rows); headerSelect.replaceChildren();
-      rows.slice(0, 30).forEach((_, index) => { const option = document.createElement('option'); option.value = String(index); option.textContent = `${index + 1}行目`; option.selected = index === selected; headerSelect.append(option); });
-      csvSection.hidden = false; message.textContent = 'CSVを端末内で読み取りました。外部送信はしていません。'; regenerate();
+      const approvedSchemaIndex = window.SbiInspector.findApprovedSchemaIndex(rows);
+      const selected = approvedSchemaIndex >= 0 ? approvedSchemaIndex : likelyHeaderIndex(rows);
+      headerSelect.replaceChildren();
+      const selectableIndexes = rows.slice(0, 30).map((_, index) => index);
+      if (approvedSchemaIndex >= 30) selectableIndexes.push(approvedSchemaIndex);
+      selectableIndexes.forEach((index) => { const option = document.createElement('option'); option.value = String(index); option.textContent = `${index + 1}行目`; option.selected = index === selected; headerSelect.append(option); });
+      headerSelect.disabled = approvedSchemaIndex >= 0;
+      csvSection.hidden = false;
+      if (regenerate()) message.textContent = approvedSchemaIndex >= 0
+        ? 'SBI約定履歴14列を認識し、見出し行を安全に固定しました。外部送信はしていません。'
+        : 'CSVを端末内で読み取りました。外部送信はしていません。';
     } catch (error) {
       if (version === selectionVersion) message.textContent = error instanceof Error ? error.message : 'ファイルを読み取れませんでした。';
     }
   });
   headerSelect.addEventListener('change', regenerate);
-  confirmed.addEventListener('change', () => { reportButton.disabled = !confirmed.checked; fixtureButton.disabled = !confirmed.checked; });
-  reportButton.addEventListener('click', () => download('sbi-format-report.json', JSON.stringify(artifacts.report, null, 2) + '\n', 'application/json'));
-  fixtureButton.addEventListener('click', () => download('sbi-synthetic-fixture.csv', '\ufeff' + artifacts.syntheticCsv, 'text/csv'));
+  confirmed.addEventListener('change', () => { reportButton.disabled = !confirmed.checked || !artifacts; fixtureButton.disabled = !confirmed.checked || !artifacts; });
+  reportButton.addEventListener('click', () => { if (artifacts) download('sbi-format-report.json', JSON.stringify(artifacts.report, null, 2) + '\n', 'application/json'); });
+  fixtureButton.addEventListener('click', () => { if (artifacts) download('sbi-synthetic-fixture.csv', '\ufeff' + artifacts.syntheticCsv, 'text/csv'); });
   byId('pdf-confirmed').addEventListener('change', (event) => { byId('download-pdf-report').disabled = !event.target.checked; });
   byId('download-pdf-report').addEventListener('click', () => download('sbi-pdf-format-report.json', JSON.stringify(pdfReport, null, 2) + '\n', 'application/json'));
 })();

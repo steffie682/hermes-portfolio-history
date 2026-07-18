@@ -60,6 +60,16 @@
       : safe;
   }
 
+  const SBI_TRADE_HISTORY_SCHEMA = ['約定日', '銘柄', '銘柄コード', '市場', '取引', '期限', '預り', '課税', '約定数量', '約定単価', '手数料/諸経費等', '税額', '受渡日', '受渡金額/決済損益'];
+
+  function findApprovedSchemaIndex(rows) {
+    const matches = [];
+    rows.forEach((row, index) => {
+      if (row.length === SBI_TRADE_HISTORY_SCHEMA.length && SBI_TRADE_HISTORY_SCHEMA.every((header, column) => String(row[column]) === header)) matches.push(index);
+    });
+    return matches.length === 1 ? matches[0] : -1;
+  }
+
   function buildSafeArtifacts(rows, headerRowIndex, metadata) {
     if (!Number.isInteger(headerRowIndex) || headerRowIndex < 0 || headerRowIndex >= rows.length) throw new Error('見出し行を選んでください');
     const delimiter = metadata.delimiter === '\t' ? '\t' : ',';
@@ -75,6 +85,30 @@
       }
       return { header, patterns, maximumLength };
     });
+    const approvedCategoryHeaders = ['取引', '期限', '預り', '課税'];
+    const approvedCategoryIndexes = [4, 5, 6, 7];
+    const approvedSchemaIndex = findApprovedSchemaIndex(rows);
+    const safeCategoryValues = {};
+    if (approvedSchemaIndex >= 0) {
+      const approvedRows = rows.slice(approvedSchemaIndex + 1).filter((row) => row.some((value) => String(value).trim()));
+      for (const row of approvedRows) {
+        if (row.length !== SBI_TRADE_HISTORY_SCHEMA.length) throw new Error('共有対象の分類行の列数が不正です');
+      }
+      approvedCategoryHeaders.forEach((approvedHeader, headerOffset) => {
+        const index = approvedCategoryIndexes[headerOffset];
+        const unique = new Set();
+        for (const row of approvedRows) {
+          const value = String(row[index] ?? '').trim();
+          if (!value) continue;
+          if (value.length > 40 || /(?:[\u0000-\u001f\u007f-\u009f]|\p{Bidi_Control})/u.test(value) || /[0-9０-９]/.test(value)) {
+            throw new Error('共有対象の分類値が安全基準を満たしません');
+          }
+          unique.add(value);
+          if (unique.size > 100) throw new Error('共有対象の分類値が安全上限を超えています');
+        }
+        safeCategoryValues[approvedHeader] = [...unique].sort((a, b) => a.localeCompare(b, 'ja'));
+      });
+    }
     const syntheticRows = dataRows.slice(0, 5).map((row) => headers.map((_, index) => safeValue(row[index] ?? '')));
     const syntheticCsv = [headers, ...syntheticRows]
       .map((row) => row.map((value) => escapeCsv(value, delimiter)).join(delimiter))
@@ -90,8 +124,10 @@
         columnCount: headers.length,
         headers,
         columns,
-        containsSourceDataValues: false,
         retainsSourceHeaders: true,
+        retainsApprovedCategoryValues: approvedSchemaIndex >= 0,
+        categorySchema: approvedSchemaIndex >= 0 ? 'sbi-trade-history-v1' : null,
+        safeCategoryValues,
       },
       syntheticCsv,
     };
@@ -106,5 +142,5 @@
     }).sort((a, b) => b.width - a.width)[0].delimiter;
   }
 
-  return { parseCsv, buildSafeArtifacts, detectDelimiter, classify };
+  return { parseCsv, buildSafeArtifacts, detectDelimiter, classify, findApprovedSchemaIndex };
 });
