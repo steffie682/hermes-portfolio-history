@@ -22,6 +22,8 @@ assert.equal('rawRows' in artifacts.report, false);
 assert.deepEqual(parseCsv('a,b\r\n"複数\n行",2', ','), [['a', 'b'], ['複数\n行', '2']]);
 assert.throws(() => parseCsv('a,b\n"閉じていない,b', ','), /引用符/);
 assert.equal(detectDelimiter('列1\t列2\n"カンマ,入り"\t値'), '\t');
+const longTsv = '列1\t列2\n"' + 'あ'.repeat(210000) + ',カンマ入り"\t値';
+assert.equal(detectDelimiter(longTsv), '\t');
 assert.equal(artifacts.report.containsSourceDataValues, false);
 assert.equal(artifacts.report.retainsSourceHeaders, true);
 assert.equal('containsSourceValues' in artifacts.report, false);

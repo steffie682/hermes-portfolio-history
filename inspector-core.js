@@ -98,7 +98,7 @@
   }
 
   function detectDelimiter(text) {
-    const sample = text.slice(0, 200000);
+    const sample = text;
     const candidates = [',', '\t'];
     return candidates.map((delimiter) => {
       try { return { delimiter, width: parseCsv(sample, delimiter).reduce((max, row) => Math.max(max, row.length), 0) }; }
