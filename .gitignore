@@ -53,3 +53,10 @@ minio-data/
 
 # Hermes local state
 .hermes/
+
+# Deployment-local credentials and project links
+.vercel/
+.env
+.env.local
+.env.*.local
+.env*
