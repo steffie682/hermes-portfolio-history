@@ -5,22 +5,33 @@
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   function parseCsv(text, delimiter) {
     const rows = [];
-    let row = [], field = '', quoted = false;
+    let row = [], field = '', quoted = false, closedQuote = false;
+    const finishField = () => { row.push(field); field = ''; closedQuote = false; };
+    const finishRow = () => { finishField(); rows.push(row); row = []; };
     for (let i = 0; i < text.length; i += 1) {
       const char = text[i];
-      if (char === '"') {
-        if (quoted && text[i + 1] === '"') { field += '"'; i += 1; }
-        else quoted = !quoted;
-      } else if (char === delimiter && !quoted) {
-        row.push(field); field = '';
-      } else if ((char === '\n' || char === '\r') && !quoted) {
+      if (quoted) {
+        if (char === '"') {
+          if (text[i + 1] === '"') { field += '"'; i += 1; }
+          else { quoted = false; closedQuote = true; }
+        } else field += char;
+      } else if (closedQuote) {
+        if (char === delimiter) finishField();
+        else if (char === '\n' || char === '\r') {
+          if (char === '\r' && text[i + 1] === '\n') i += 1;
+          finishRow();
+        } else if (!/\s/.test(char)) throw new Error('CSVの引用符の後に不正な文字があります');
+      } else if (char === '"') {
+        if (field.length) throw new Error('CSVの引用符の位置が不正です');
+        quoted = true;
+      } else if (char === delimiter) finishField();
+      else if (char === '\n' || char === '\r') {
         if (char === '\r' && text[i + 1] === '\n') i += 1;
-        row.push(field); rows.push(row); row = []; field = '';
-      } else {
-        field += char;
-      }
+        finishRow();
+      } else field += char;
     }
-    if (field.length || row.length) { row.push(field); rows.push(row); }
+    if (quoted) throw new Error('CSVに閉じていない引用符があります');
+    if (field.length || row.length || closedQuote) finishRow();
     return rows.filter((candidate) => candidate.some((value) => value.length));
   }
 
@@ -79,17 +90,20 @@
         columnCount: headers.length,
         headers,
         columns,
-        containsSourceValues: false,
+        containsSourceDataValues: false,
+        retainsSourceHeaders: true,
       },
       syntheticCsv,
     };
   }
 
   function detectDelimiter(text) {
-    const sample = text.split(/\r?\n/).slice(0, 20).join('\n');
+    const sample = text.slice(0, 200000);
     const candidates = [',', '\t'];
-    return candidates.map((delimiter) => ({ delimiter, width: parseCsv(sample, delimiter).reduce((max, row) => Math.max(max, row.length), 0) }))
-      .sort((a, b) => b.width - a.width)[0].delimiter;
+    return candidates.map((delimiter) => {
+      try { return { delimiter, width: parseCsv(sample, delimiter).reduce((max, row) => Math.max(max, row.length), 0) }; }
+      catch { return { delimiter, width: 0 }; }
+    }).sort((a, b) => b.width - a.width)[0].delimiter;
   }
 
   return { parseCsv, buildSafeArtifacts, detectDelimiter, classify };

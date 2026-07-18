@@ -9,12 +9,12 @@
   const confirmed = byId('confirmed');
   const reportButton = byId('download-report');
   const fixtureButton = byId('download-fixture');
-  let rows = [], metadata = {}, artifacts = null, pdfReport = null;
+  let rows = [], metadata = {}, artifacts = null, pdfReport = null, selectionVersion = 0;
 
   function download(name, content, type) {
     const url = URL.createObjectURL(new Blob([content], { type }));
-    const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click();
-    setTimeout(() => URL.revokeObjectURL(url), 0);
+    const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; document.body.append(anchor); anchor.click();
+    setTimeout(() => { URL.revokeObjectURL(url); anchor.remove(); }, 1000);
   }
   function decode(bytes) {
     if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return { text: new TextDecoder('utf-8').decode(bytes), encoding: 'utf-8-bom' };
@@ -36,7 +36,7 @@
     rows.slice(0, 15).forEach((row, index) => {
       const tr = document.createElement('tr'); if (index === selected) tr.className = 'selected';
       const number = document.createElement('th'); number.textContent = `${index + 1}行`; tr.append(number);
-      row.slice(0, 12).forEach((value) => { const td = document.createElement('td'); td.textContent = String(value); tr.append(td); });
+      row.slice(0, 12).forEach((value) => { const td = document.createElement(index === selected ? 'th' : 'td'); if (index === selected) td.setAttribute('scope', 'col'); td.textContent = String(value); tr.append(td); });
       rawPreview.append(tr);
     });
   }
@@ -50,23 +50,33 @@
   }
   function reset() {
     rows = []; artifacts = null; pdfReport = null; csvSection.hidden = true; pdfSection.hidden = true;
+    confirmed.checked = false; reportButton.disabled = true; fixtureButton.disabled = true;
+    byId('pdf-confirmed').checked = false; byId('download-pdf-report').disabled = true;
   }
   fileInput.addEventListener('change', async () => {
-    reset(); const file = fileInput.files[0]; if (!file) return;
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const pdf = bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
-    if (pdf) {
-      pdfReport = { formatVersion: 1, documentKind: 'pdf-metadata-only', validPdfMagic: true, approximateSizeKiB: Math.ceil(bytes.byteLength / 1024), containsSourceContent: false };
-      pdfSection.hidden = false; message.textContent = 'PDF形式を確認しました。内容は読み取っていません。'; return;
+    const version = ++selectionVersion;
+    reset(); const file = fileInput.files[0];
+    if (!file) { message.textContent = 'ファイルはまだ選択されていません。'; return; }
+    if (file.size > 25 * 1024 * 1024) { message.textContent = 'ファイルは25MB以下にしてください。'; return; }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (version !== selectionVersion) return;
+      const pdf = bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
+      if (pdf) {
+        pdfReport = { formatVersion: 1, documentKind: 'pdf-signature-metadata-only', hasPdfSignature: true, approximateSizeKiB: Math.ceil(bytes.byteLength / 1024), containsSourceContent: false };
+        pdfSection.hidden = false; message.textContent = 'PDFらしい先頭記号を確認しました。内容やPDF構造の正常性は確認していません。'; return;
+      }
+      if (bytes.byteLength > 10 * 1024 * 1024) { message.textContent = 'CSVは10MB以下にしてください。'; return; }
+      const decoded = decode(bytes); const delimiter = window.SbiInspector.detectDelimiter(decoded.text);
+      rows = window.SbiInspector.parseCsv(decoded.text, delimiter);
+      if (!rows.length || rows.every((row) => row.length < 2)) { message.textContent = '表形式のCSVとして認識できませんでした。'; return; }
+      metadata = { encoding: decoded.encoding, delimiter };
+      const selected = likelyHeaderIndex(rows); headerSelect.replaceChildren();
+      rows.slice(0, 30).forEach((_, index) => { const option = document.createElement('option'); option.value = String(index); option.textContent = `${index + 1}行目`; option.selected = index === selected; headerSelect.append(option); });
+      csvSection.hidden = false; message.textContent = 'CSVを端末内で読み取りました。外部送信はしていません。'; regenerate();
+    } catch (error) {
+      if (version === selectionVersion) message.textContent = error instanceof Error ? error.message : 'ファイルを読み取れませんでした。';
     }
-    if (bytes.byteLength > 10 * 1024 * 1024) { message.textContent = 'CSVは10MB以下にしてください。'; return; }
-    const decoded = decode(bytes); const delimiter = window.SbiInspector.detectDelimiter(decoded.text);
-    rows = window.SbiInspector.parseCsv(decoded.text, delimiter);
-    if (!rows.length || rows.every((row) => row.length < 2)) { message.textContent = '表形式のCSVとして認識できませんでした。'; return; }
-    metadata = { encoding: decoded.encoding, delimiter };
-    const selected = likelyHeaderIndex(rows); headerSelect.replaceChildren();
-    rows.slice(0, 30).forEach((_, index) => { const option = document.createElement('option'); option.value = String(index); option.textContent = `${index + 1}行目`; option.selected = index === selected; headerSelect.append(option); });
-    csvSection.hidden = false; message.textContent = 'CSVを端末内で読み取りました。外部送信はしていません。'; regenerate();
   });
   headerSelect.addEventListener('change', regenerate);
   confirmed.addEventListener('change', () => { reportButton.disabled = !confirmed.checked; fixtureButton.disabled = !confirmed.checked; });
