@@ -41,6 +41,9 @@ assert.deepEqual(categories.report.safeCategoryValues, {
 });
 assert.equal(categories.report.retainsApprovedCategoryValues, true);
 assert.equal(categories.report.categorySchema, 'sbi-trade-history-v1');
+const durationCategory = buildSafeArtifacts([sbiHeaders, row('現物買', '6ヶ月')], 0, { encoding: 'shift_jis', delimiter: ',' });
+assert.deepEqual(durationCategory.report.safeCategoryValues['期限'], ['6ヶ月']);
+assert.throws(() => buildSafeArtifacts([sbiHeaders, row('現物買', '9999')], 0, { encoding: 'shift_jis', delimiter: ',' }), /期限/);
 assert.equal(JSON.stringify(categories.report.safeCategoryValues).includes('秘密の銘柄'), false);
 assert.equal(JSON.stringify(categories.report.safeCategoryValues).includes('9999'), false);
 assert.equal(JSON.stringify(categories.report.safeCategoryValues).includes('count'), false);

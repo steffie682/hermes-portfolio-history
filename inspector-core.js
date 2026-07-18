@@ -100,8 +100,12 @@
         for (const row of approvedRows) {
           const value = String(row[index] ?? '').trim();
           if (!value) continue;
-          if (value.length > 40 || /(?:[\u0000-\u001f\u007f-\u009f]|\p{Bidi_Control})/u.test(value) || /[0-9０-９]/.test(value)) {
-            throw new Error('共有対象の分類値が安全基準を満たしません');
+          if (value.length > 40 || /(?:[\u0000-\u001f\u007f-\u009f]|\p{Bidi_Control})/u.test(value)) {
+            throw new Error(`「${approvedHeader}」の分類値が安全基準を満たしません`);
+          }
+          if (/[0-9０-９]/.test(value)) {
+            const safeDuration = approvedHeader === '期限' && /^[0-9０-９]{1,3}(?:営業日|日|週間|週|ヶ月|ヵ月|か月|カ月|ケ月|月|年)$/.test(value);
+            if (!safeDuration) throw new Error(`「${approvedHeader}」の分類値に安全でない数値表現があります`);
           }
           unique.add(value);
           if (unique.size > 100) throw new Error('共有対象の分類値が安全上限を超えています');
