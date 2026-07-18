@@ -4,6 +4,7 @@ import { useRef, useState, type ChangeEvent } from 'react';
 import { buildSbiImportPreview, type SbiImportPreview } from '@/import/sbi/import-preview';
 import { parseSbiTradeHistory } from '@/import/sbi/trade-history';
 import { assessSbiCashTradeRows } from '@/import/sbi/cash-trade-event';
+import { assessSbiDistributionReinvestments } from '@/import/sbi/distribution-reinvestment-event';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
@@ -18,6 +19,7 @@ export default function SbiImportClient() {
   const operationVersion = useRef(0);
   const [preview, setPreview] = useState<SbiImportPreview | null>(null);
   const [cashAssessment, setCashAssessment] = useState<ReturnType<typeof assessSbiCashTradeRows> | null>(null);
+  const [reinvestmentAssessment, setReinvestmentAssessment] = useState<ReturnType<typeof assessSbiDistributionReinvestments> | null>(null);
   const [status, setStatus] = useState<string>('');
   const [error, setError] = useState<string>('');
 
@@ -26,6 +28,7 @@ export default function SbiImportClient() {
     const file = event.currentTarget.files?.[0];
     setPreview(null);
     setCashAssessment(null);
+    setReinvestmentAssessment(null);
     setError('');
     setStatus('');
     if (!file) return;
@@ -40,9 +43,11 @@ export default function SbiImportClient() {
       const parsed = parseSbiTradeHistory(new Uint8Array(buffer));
       const nextPreview = buildSbiImportPreview(parsed.rows);
       const nextCashAssessment = assessSbiCashTradeRows(parsed.rows);
+      const nextReinvestmentAssessment = assessSbiDistributionReinvestments(parsed.rows);
       if (version !== operationVersion.current) return;
       setPreview(nextPreview);
       setCashAssessment(nextCashAssessment);
+      setReinvestmentAssessment(nextReinvestmentAssessment);
       setStatus(`取引 ${nextPreview.totalRows}件`);
     } catch (caught) {
       if (version !== operationVersion.current) return;
@@ -89,6 +94,13 @@ export default function SbiImportClient() {
               <strong>{`現物・投信の台帳準備 ${cashAssessment.readyRows} / ${cashAssessment.cashCandidateRows}件`}</strong>
               {cashAssessment.needsReviewRows > 0 ? <p>{`金額確認が必要な行 ${cashAssessment.needsReviewRows}件`}</p> : null}
               {cashAssessment.requiresOpeningCheckpoint ? <p>開始時点の保有残高が必要です</p> : null}
+            </div>
+          ) : null}
+          {reinvestmentAssessment && reinvestmentAssessment.candidateRows > 0 ? (
+            <div className="distribution-readiness" aria-label="分配金再投資の準備">
+              <strong>{`再投資口数の準備 ${reinvestmentAssessment.unitsReadyRows} / ${reinvestmentAssessment.candidateRows}件`}</strong>
+              {reinvestmentAssessment.needsReviewRows > 0 ? <p>{`口数確認が必要な行 ${reinvestmentAssessment.needsReviewRows}件`}</p> : null}
+              {reinvestmentAssessment.requiresDistributionDetails ? <p>分配金・税・取得価額の詳細が必要です</p> : null}
             </div>
           ) : null}
           {preview.totalRows === 0 ? (

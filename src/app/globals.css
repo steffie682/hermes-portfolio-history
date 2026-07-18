@@ -116,3 +116,7 @@ dd { margin: 0; font-weight: 650; }
 .cash-readiness { margin: 0 0 18px; padding: 16px; border: 1px solid #9fc4dd; border-radius: 12px; background: #eef7fc; }
 .cash-readiness strong { display: block; color: #164f73; }
 .cash-readiness p { margin: 8px 0 0; }
+
+.distribution-readiness { margin: 0 0 18px; padding: 16px; border: 1px solid #d9b86c; border-radius: 12px; background: #fff8e8; }
+.distribution-readiness strong { display: block; color: #785715; }
+.distribution-readiness p { margin: 8px 0 0; }
