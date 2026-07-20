@@ -1,14 +1,24 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import LoginPage from '@/app/login/page';
 
+const { push, startAuthentication } = vi.hoisted(() => ({
+  push: vi.fn(),
+  startAuthentication: vi.fn().mockResolvedValue({ id: 'existing-passkey' }),
+}));
+
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  useRouter: () => ({ push, refresh: vi.fn() }),
+}));
+vi.mock('@simplewebauthn/browser', () => ({
+  startAuthentication,
+  startRegistration: vi.fn(),
 }));
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.clearAllMocks();
 });
 
 describe('LoginPage', () => {
@@ -42,5 +52,17 @@ describe('LoginPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '新しいアカウントを作る' }));
 
     expect(screen.getByRole('status').textContent).toBe('新しいアカウントを作成しています…');
+  });
+
+  it('opens the authenticated import page after a successful passkey login', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ options: { challenge: 'login' } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<LoginPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '顔認証・指紋・PINでログイン' }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/imports/sbi'));
   });
 });

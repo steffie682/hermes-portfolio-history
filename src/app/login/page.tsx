@@ -43,7 +43,7 @@ export default function LoginPage() {
       body: JSON.stringify({ response: credential }),
     });
     if (!verifyResponse.ok) throw new Error('ログインできませんでした');
-    router.push('/');
+    router.push('/imports/sbi');
     router.refresh();
   }
 
