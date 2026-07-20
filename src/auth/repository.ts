@@ -5,6 +5,7 @@ import {
   authSessions,
   authUsers,
   brokerAccounts,
+  deviceEnrollmentGrants,
   passkeyCredentials,
 } from '@/db/schema';
 import {
@@ -13,6 +14,7 @@ import {
   type SessionStore,
 } from './session';
 import type { ChallengeRecord, PersistRegistrationInput } from './passkey-registration';
+import type { PersistDeviceEnrollmentInput } from './device-enrollment';
 import type { StoredPasskey } from './passkey-authentication';
 
 export function createAuthRepository(db: AppDatabase) {
@@ -46,6 +48,171 @@ export function createAuthRepository(db: AppDatabase) {
     };
 
   return {
+    async saveDeviceEnrollmentGrant(
+      principal: AuthenticatedPrincipal,
+      recentSessionTokenHash: string,
+      grant: {
+        tokenHash: string;
+        challenge: string;
+      },
+      _now: Date,
+    ) {
+      void _now; // Compatibility only; security decisions use PostgreSQL CURRENT_TIMESTAMP.
+      const userId = authenticatedPrincipalId(principal);
+      return db.transaction(async (tx) => {
+        const [activeUser] = await tx
+          .select({ id: authUsers.id })
+          .from(authUsers)
+          .where(
+            and(eq(authUsers.id, userId), isNull(authUsers.deletionRequestedAt)),
+          )
+          .limit(1)
+          .for('update');
+        if (!activeUser) {
+          throw new Error('Recent user verification is required');
+        }
+        const [recentSession] = await tx
+          .select({ id: authSessions.id })
+          .from(authSessions)
+          .innerJoin(authUsers, eq(authUsers.id, authSessions.userId))
+          .where(
+            and(
+              eq(authSessions.tokenHash, recentSessionTokenHash),
+              eq(authSessions.userId, userId),
+              eq(authSessions.authMethod, 'passkey_authentication'),
+              sql`${authSessions.expiresAt} > CURRENT_TIMESTAMP`,
+              sql`${authSessions.authenticatedAt} > CURRENT_TIMESTAMP - interval '5 minutes'`,
+              sql`${authSessions.authenticatedAt} <= CURRENT_TIMESTAMP`,
+              isNull(authUsers.deletionRequestedAt),
+            ),
+          )
+          .limit(1)
+          .for('update', { of: authSessions });
+        if (!recentSession) {
+          throw new Error('Recent user verification is required');
+        }
+        await tx
+          .delete(deviceEnrollmentGrants)
+          .where(eq(deviceEnrollmentGrants.userId, userId));
+        const [savedGrant] = await tx
+          .insert(deviceEnrollmentGrants)
+          .values({
+            ...grant,
+            userId,
+            sourceSessionId: recentSession.id,
+            purpose: 'add_device',
+            expiresAt: sql`CURRENT_TIMESTAMP + interval '5 minutes'`,
+          })
+          .returning({ expiresAt: deviceEnrollmentGrants.expiresAt });
+        return savedGrant.expiresAt;
+      });
+    },
+    async loadDeviceEnrollmentGrant(tokenHash: string, _now: Date) {
+      void _now; // Compatibility only; security decisions use PostgreSQL CURRENT_TIMESTAMP.
+      const [grant] = await db
+        .select({
+          userId: deviceEnrollmentGrants.userId,
+          name: authUsers.name,
+          challenge: deviceEnrollmentGrants.challenge,
+        })
+        .from(deviceEnrollmentGrants)
+        .innerJoin(authUsers, eq(authUsers.id, deviceEnrollmentGrants.userId))
+        .innerJoin(authSessions, eq(authSessions.id, deviceEnrollmentGrants.sourceSessionId))
+        .where(
+          and(
+            eq(deviceEnrollmentGrants.tokenHash, tokenHash),
+            eq(deviceEnrollmentGrants.purpose, 'add_device'),
+            eq(authSessions.userId, deviceEnrollmentGrants.userId),
+            sql`${deviceEnrollmentGrants.expiresAt} > CURRENT_TIMESTAMP`,
+            sql`${authSessions.expiresAt} > CURRENT_TIMESTAMP`,
+            isNull(authUsers.deletionRequestedAt),
+          ),
+        )
+        .limit(1);
+      if (!grant) return null;
+      const credentials = await db
+        .select({ id: passkeyCredentials.id, transports: passkeyCredentials.transports })
+        .from(passkeyCredentials)
+        .where(eq(passkeyCredentials.userId, grant.userId));
+      return {
+        ...grant,
+        excludeCredentials: credentials.map((credential) => ({
+          id: credential.id,
+          transports: credential.transports as StoredPasskey['transports'],
+        })),
+      };
+    },
+    async persistDeviceEnrollment(input: PersistDeviceEnrollmentInput) {
+      await db.transaction(async (tx) => {
+        const [activeUser] = await tx
+          .select({ id: authUsers.id })
+          .from(authUsers)
+          .where(
+            and(
+              eq(authUsers.id, input.userId),
+              isNull(authUsers.deletionRequestedAt),
+            ),
+          )
+          .limit(1)
+          .for('update');
+        if (!activeUser) throw new Error('Device enrollment user is unavailable');
+
+        const [grantCandidate] = await tx
+          .select({ sourceSessionId: deviceEnrollmentGrants.sourceSessionId })
+          .from(deviceEnrollmentGrants)
+          .where(
+            and(
+              eq(deviceEnrollmentGrants.tokenHash, input.tokenHash),
+              eq(deviceEnrollmentGrants.userId, input.userId),
+              eq(deviceEnrollmentGrants.purpose, 'add_device'),
+              eq(deviceEnrollmentGrants.challenge, input.challenge),
+              sql`${deviceEnrollmentGrants.expiresAt} > CURRENT_TIMESTAMP`,
+            ),
+          )
+          .limit(1);
+        if (!grantCandidate) {
+          throw new Error('Device enrollment grant was already consumed');
+        }
+        const [activeSourceSession] = await tx
+          .select({ id: authSessions.id })
+          .from(authSessions)
+          .where(
+            and(
+              eq(authSessions.id, grantCandidate.sourceSessionId),
+              eq(authSessions.userId, input.userId),
+              sql`${authSessions.expiresAt} > CURRENT_TIMESTAMP`,
+            ),
+          )
+          .limit(1)
+          .for('update');
+        if (!activeSourceSession) {
+          throw new Error('Device enrollment grant was already consumed');
+        }
+        const consumed = await tx
+          .delete(deviceEnrollmentGrants)
+          .where(
+            and(
+              eq(deviceEnrollmentGrants.tokenHash, input.tokenHash),
+              eq(deviceEnrollmentGrants.userId, input.userId),
+              eq(deviceEnrollmentGrants.sourceSessionId, activeSourceSession.id),
+              eq(deviceEnrollmentGrants.purpose, 'add_device'),
+              eq(deviceEnrollmentGrants.challenge, input.challenge),
+              sql`${deviceEnrollmentGrants.expiresAt} > CURRENT_TIMESTAMP`,
+            ),
+          )
+          .returning({ userId: deviceEnrollmentGrants.userId });
+        if (consumed.length !== 1) {
+          throw new Error('Device enrollment grant was already consumed');
+        }
+        const userId = consumed[0].userId;
+        await tx.insert(passkeyCredentials).values({
+          ...input.credential,
+          userId,
+          publicKey: Uint8Array.from(input.credential.publicKey) as Buffer,
+        });
+        await tx.insert(authSessions).values({ ...input.session, userId });
+      });
+    },
     async saveChallenge(record: ChallengeRecord) {
       await db.transaction(async (tx) => {
         await tx
@@ -112,6 +279,8 @@ export function createAuthRepository(db: AppDatabase) {
       tokenHash: string;
       expiresAt: Date;
       contextHash: string;
+      authMethod: 'passkey_authentication';
+      authenticatedAt: Date;
       now: Date;
     }) {
       await db.transaction(async (tx) => {
@@ -146,6 +315,8 @@ export function createAuthRepository(db: AppDatabase) {
           userId: input.userId,
           tokenHash: input.tokenHash,
           expiresAt: input.expiresAt,
+          authMethod: input.authMethod,
+          authenticatedAt: sql`CURRENT_TIMESTAMP`,
         });
       });
     },

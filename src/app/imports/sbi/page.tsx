@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { resolvePageSessionPrincipal } from '@/auth/page-session';
 import SbiImportClient from './import-client';
@@ -18,6 +19,7 @@ export default async function SbiImportPage() {
         <p className="preview-badge">ログイン済みの利用者向け</p>
         <h1 id="sbi-import-title">SBI CSV取込</h1>
         <p>この画面内でCSVを確認します</p>
+        <p><Link href="/settings/devices">スマホでも同じアカウントを使う</Link></p>
         <SbiImportClient />
       </section>
     </main>

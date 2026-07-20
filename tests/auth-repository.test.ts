@@ -40,6 +40,8 @@ describe('authentication repository', () => {
           userId: 'user-1',
           tokenHash: hashSessionToken('session-token'),
           expiresAt: new Date('2026-08-17T12:00:00Z'),
+          authMethod: 'passkey_registration',
+          authenticatedAt: now,
         },
         contextHash: 'context-hash',
         now,
@@ -63,6 +65,8 @@ describe('authentication repository', () => {
             userId: 'user-2',
             tokenHash: 'replay-token-hash',
             expiresAt: new Date('2026-08-17T12:00:00Z'),
+            authMethod: 'passkey_registration',
+            authenticatedAt: now,
           },
           contextHash: 'context-hash',
           now,
@@ -77,6 +81,9 @@ describe('authentication repository', () => {
         contextHash: 'auth-context-hash',
         expiresAt: new Date('2026-07-17T12:05:00Z'),
       });
+      const beforeAuthentication = await client.query<{ now: Date }>(
+        'select CURRENT_TIMESTAMP as now',
+      );
       const authentication = {
         credentialId: 'credential-1',
         previousCounter: 0,
@@ -85,9 +92,24 @@ describe('authentication repository', () => {
         tokenHash: hashSessionToken('second-session'),
         expiresAt: new Date('2026-08-17T12:00:00Z'),
         contextHash: 'auth-context-hash',
+        authMethod: 'passkey_authentication' as const,
+        authenticatedAt: new Date('2099-01-01T00:00:00Z'),
         now,
       };
       await repository.persistAuthentication(authentication);
+      const afterAuthentication = await client.query<{ now: Date }>(
+        'select CURRENT_TIMESTAMP as now',
+      );
+      const persistedAuthentication = await client.query<{ authenticated_at: Date }>(
+        `select authenticated_at from auth_sessions where token_hash = $1`,
+        [authentication.tokenHash],
+      );
+      expect(persistedAuthentication.rows[0].authenticated_at.getTime()).toBeGreaterThanOrEqual(
+        beforeAuthentication.rows[0].now.getTime(),
+      );
+      expect(persistedAuthentication.rows[0].authenticated_at.getTime()).toBeLessThanOrEqual(
+        afterAuthentication.rows[0].now.getTime(),
+      );
       await expect(
         repository.persistAuthentication({
           ...authentication,

@@ -10,7 +10,7 @@ export default function LoginPage() {
   const [message, setMessage] = useState('');
 
   async function register() {
-    setMessage('利用登録を進めています…');
+    setMessage('新しいアカウントを作成しています…');
     const optionsResponse = await fetch('/api/auth/passkey/register/options', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -64,7 +64,7 @@ export default function LoginPage() {
         <button type="button" onClick={() => void run(signIn)}>
           顔認証・指紋・PINでログイン
         </button>
-        <div className="divider">初めて使う場合</div>
+        <div className="divider">新しく使い始める場合</div>
         <label htmlFor="display-name">表示名</label>
         <input
           id="display-name"
@@ -74,8 +74,11 @@ export default function LoginPage() {
           autoComplete="nickname"
         />
         <button type="button" disabled={!name.trim()} onClick={() => void run(register)}>
-          この端末で利用を始める
+          新しいアカウントを作る
         </button>
+        <p className="auth-note">
+          別の端末で同じアカウントを使う場合は、ログイン済みの端末からスマホを追加してください。
+        </p>
         <p className="auth-note">
           この仕組みにはPasskeyを使用します。パスワードを覚える必要はありません。
         </p>

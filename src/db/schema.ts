@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   bytea,
+  check,
   index,
   pgPolicy,
   pgTable,
@@ -52,8 +53,37 @@ export const authSessions = pgTable('auth_sessions', {
     .references(() => authUsers.id, { onDelete: 'cascade' }),
   tokenHash: text('token_hash').notNull().unique(),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  authMethod: text('auth_method'),
+  authenticatedAt: timestamp('authenticated_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const deviceEnrollmentGrants = pgTable(
+  'device_enrollment_grants',
+  {
+    tokenHash: text('token_hash').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => authUsers.id, { onDelete: 'cascade' }),
+    sourceSessionId: uuid('source_session_id')
+      .notNull()
+      .references(() => authSessions.id, { onDelete: 'cascade' }),
+    purpose: text('purpose').notNull(),
+    challenge: text('challenge').notNull().unique(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('device_enrollment_grants_expires_at_idx').on(table.expiresAt),
+    index('device_enrollment_grants_user_id_idx').on(table.userId),
+    index('device_enrollment_grants_source_session_id_idx').on(table.sourceSessionId),
+    check('device_enrollment_grants_purpose_check', sql`${table.purpose} = 'add_device'`),
+    check(
+      'device_enrollment_grants_expiry_window_check',
+      sql`${table.expiresAt} > ${table.createdAt} AND ${table.expiresAt} <= ${table.createdAt} + interval '5 minutes'`,
+    ),
+  ],
+);
 
 export const passkeyCredentials = pgTable('passkey_credentials', {
   id: text('id').primaryKey(),

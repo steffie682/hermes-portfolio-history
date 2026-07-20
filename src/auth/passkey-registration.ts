@@ -65,7 +65,13 @@ export type PersistRegistrationInput = {
     backedUp: boolean;
     transports?: string[];
   };
-  session: { userId: string; tokenHash: string; expiresAt: Date };
+  session: {
+    userId: string;
+    tokenHash: string;
+    expiresAt: Date;
+    authMethod: 'passkey_registration';
+    authenticatedAt: Date;
+  };
   contextHash: string;
   now: Date;
 };
@@ -124,6 +130,8 @@ export async function finishPasskeyRegistration(
       userId: identity.userId,
       tokenHash: hashSessionToken(token),
       expiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+      authMethod: 'passkey_registration',
+      authenticatedAt: now,
     },
     contextHash,
     now,

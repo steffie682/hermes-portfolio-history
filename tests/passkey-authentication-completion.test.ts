@@ -56,6 +56,8 @@ describe('passkey authentication completion', () => {
         userId: 'user-1',
         tokenHash: hashSessionToken('session-token'),
         contextHash: hashSessionToken('challenge-token'),
+        authMethod: 'passkey_authentication',
+        authenticatedAt: new Date('2026-07-17T12:00:00Z'),
       }),
     );
     expect(result.sessionToken).toBe('session-token');

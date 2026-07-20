@@ -1,0 +1,1 @@
+ALTER TABLE "device_enrollment_grants" ADD CONSTRAINT "device_enrollment_grants_expiry_window_check" CHECK ("expires_at" > "created_at" AND "expires_at" <= "created_at" + interval '5 minutes');

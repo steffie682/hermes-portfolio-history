@@ -19,9 +19,12 @@ describe('LoginPage', () => {
     ).toBeTruthy();
     expect(screen.getByLabelText('表示名')).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: 'この端末で利用を始める' }),
+      screen.getByRole('button', { name: '新しいアカウントを作る' }),
     ).toBeTruthy();
-    expect(screen.getByText('初めて使う場合')).toBeTruthy();
+    expect(screen.getByText('新しく使い始める場合')).toBeTruthy();
+    expect(
+      screen.getByText('別の端末で同じアカウントを使う場合は、ログイン済みの端末からスマホを追加してください。'),
+    ).toBeTruthy();
     expect(
       screen.getByText(
         'この仕組みにはPasskeyを使用します。パスワードを覚える必要はありません。',
@@ -36,8 +39,8 @@ describe('LoginPage', () => {
     fireEvent.change(screen.getByLabelText('表示名'), {
       target: { value: 'すてふぃー' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'この端末で利用を始める' }));
+    fireEvent.click(screen.getByRole('button', { name: '新しいアカウントを作る' }));
 
-    expect(screen.getByRole('status').textContent).toBe('利用登録を進めています…');
+    expect(screen.getByRole('status').textContent).toBe('新しいアカウントを作成しています…');
   });
 });

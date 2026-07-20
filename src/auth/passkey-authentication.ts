@@ -49,6 +49,8 @@ export async function finishPasskeyAuthentication(
       tokenHash: string;
       expiresAt: Date;
       contextHash: string;
+      authMethod: 'passkey_authentication';
+      authenticatedAt: Date;
       now: Date;
     }) => Promise<void>;
     createSessionToken?: () => string;
@@ -85,6 +87,8 @@ export async function finishPasskeyAuthentication(
     tokenHash: hashSessionToken(token),
     expiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
     contextHash,
+    authMethod: 'passkey_authentication',
+    authenticatedAt: now,
     now,
   });
   return { sessionToken: token };

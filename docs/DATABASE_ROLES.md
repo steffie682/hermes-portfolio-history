@@ -15,7 +15,11 @@ GRANT USAGE ON SCHEMA public TO portfolio_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON
   "user", auth_sessions, passkey_credentials, auth_challenges, broker_accounts
   TO portfolio_app;
-REVOKE ALL ON "user", auth_sessions, passkey_credentials, auth_challenges, broker_accounts FROM PUBLIC;
+GRANT SELECT, INSERT, DELETE ON device_enrollment_grants TO portfolio_app;
+REVOKE ALL ON
+  "user", auth_sessions, passkey_credentials, auth_challenges,
+  device_enrollment_grants, broker_accounts
+  FROM PUBLIC;
 ```
 
 Run migrations as `portfolio_migrator`, then re-apply the runtime grants when migrations add tables. The application performs a startup check against `pg_roles` and refuses a runtime role with `rolsuper` or `rolbypassrls`. `broker_accounts` additionally uses RLS and `FORCE ROW LEVEL SECURITY`; tenant queries set `app.current_user_id` transaction-locally from an opaque session-derived principal.

@@ -60,6 +60,8 @@ describe('passkey registration completion', () => {
         credential: expect.objectContaining({ id: 'credential-1', counter: 7 }),
         session: expect.objectContaining({
           tokenHash: hashSessionToken('session-token'),
+          authMethod: 'passkey_registration',
+          authenticatedAt: now,
         }),
         contextHash: hashSessionToken(context),
       }),
