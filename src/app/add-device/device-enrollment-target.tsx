@@ -1,6 +1,7 @@
 'use client';
 
 import type { PublicKeyCredentialCreationOptionsJSON } from '@simplewebauthn/browser';
+import Link from 'next/link';
 import { startRegistration } from '@simplewebauthn/browser';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
@@ -11,6 +12,7 @@ export default function DeviceEnrollmentTarget() {
   const [options, setOptions] = useState<PublicKeyCredentialCreationOptionsJSON | null>(null);
   const [message, setMessage] = useState('QRコードを確認しています…');
   const [busy, setBusy] = useState(false);
+  const [showLoginLink, setShowLoginLink] = useState(false);
 
   useEffect(() => {
     if (initialized.current) return;
@@ -37,6 +39,7 @@ export default function DeviceEnrollmentTarget() {
   async function enroll() {
     if (!options) return;
     setBusy(true);
+    setShowLoginLink(false);
     setMessage('スマホで本人確認しています…');
     try {
       const registration = await startRegistration({ optionsJSON: options });
@@ -49,8 +52,13 @@ export default function DeviceEnrollmentTarget() {
       if (!response.ok) throw new Error();
       router.push('/imports/sbi');
       router.refresh();
-    } catch {
-      setMessage('スマホを追加できませんでした。PCでQRコードを作り直してください。');
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'InvalidStateError') {
+        setShowLoginLink(true);
+        setMessage('このスマホではすでにPasskeyを利用できます。通常ログインをお試しください。');
+      } else {
+        setMessage('スマホを追加できませんでした。PCでQRコードを作り直してください。');
+      }
     } finally {
       setBusy(false);
     }
@@ -64,6 +72,7 @@ export default function DeviceEnrollmentTarget() {
         </button>
       ) : null}
       <p role="status">{message}</p>
+      {showLoginLink ? <Link href="/login">通常ログインを試す</Link> : null}
     </div>
   );
 }

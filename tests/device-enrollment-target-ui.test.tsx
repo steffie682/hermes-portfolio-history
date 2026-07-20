@@ -47,6 +47,24 @@ describe('device enrollment target UI', () => {
     });
     expect(document.body.textContent).not.toContain(grantToken);
   });
+  it('guides the user to normal login when this phone already has the passkey', async () => {
+    window.__portfolioDeviceEnrollmentPreparation = Promise.resolve({
+      options: { challenge: 'registration' } as never,
+    });
+    startRegistration.mockRejectedValueOnce(
+      new DOMException('A matching passkey already exists', 'InvalidStateError'),
+    );
+
+    render(<DeviceEnrollmentTarget />);
+    const button = await screen.findByRole('button', { name: 'このスマホを追加する' });
+    fireEvent.click(button);
+
+    expect(
+      await screen.findByText('このスマホではすでにPasskeyを利用できます。通常ログインをお試しください。'),
+    ).toBeTruthy();
+    expect(screen.getByRole('link', { name: '通常ログインを試す' }).getAttribute('href')).toBe('/login');
+  });
+
   it('places the fragment-clearing bootstrap before the hydrated target UI', () => {
     const markup = renderToStaticMarkup(<AddDevicePage />);
     expect(markup.indexOf('data-device-enrollment-bootstrap')).toBeGreaterThanOrEqual(0);
