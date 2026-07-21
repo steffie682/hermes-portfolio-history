@@ -8,6 +8,8 @@ import { createAuthRepository } from '@/auth/repository';
 import { resolveSessionPrincipal } from '@/auth/session';
 import { hashSessionToken } from '@/auth/session-token';
 import type { AppDatabase } from '@/db/client';
+import { createImportRepository } from '@/import/repository';
+import { createMemoryPrivateSourceStorage } from '@/import/storage/memory-private-source-storage';
 import { migrationDirectories } from './helpers/migrations';
 
 const adminUrl = process.env.TEST_DATABASE_ADMIN_URL;
@@ -26,6 +28,13 @@ postgresDescribe('real PostgreSQL tenant security', () => {
     appUrl.password = 'test-only-password';
     const app = postgres(appUrl.toString(), { max: 4 });
     try {
+      for (const statement of [
+        `CREATE ROLE portfolio_app LOGIN PASSWORD 'test-only-password' NOSUPERUSER NOBYPASSRLS`,
+        'GRANT CONNECT ON DATABASE portfolio_history_test TO portfolio_app',
+        'GRANT USAGE ON SCHEMA public TO portfolio_app',
+      ]) {
+        await admin.unsafe(statement);
+      }
       for (const directory of await migrationDirectories()) {
         const migration = await readFile(
           resolve(process.cwd(), 'drizzle', directory, 'migration.sql'),
@@ -36,10 +45,6 @@ postgresDescribe('real PostgreSQL tenant security', () => {
         }
       }
       for (const statement of [
-        `CREATE ROLE portfolio_app LOGIN PASSWORD 'test-only-password'
-          NOSUPERUSER NOBYPASSRLS`,
-        'GRANT CONNECT ON DATABASE portfolio_history_test TO portfolio_app',
-        'GRANT USAGE ON SCHEMA public TO portfolio_app',
         'GRANT SELECT, INSERT, UPDATE, DELETE ON "user", auth_sessions, passkey_credentials, auth_challenges TO portfolio_app',
         'GRANT SELECT, INSERT, DELETE ON device_enrollment_grants TO portfolio_app',
         'GRANT SELECT, INSERT, UPDATE, DELETE ON broker_accounts TO portfolio_app',
@@ -51,6 +56,17 @@ postgresDescribe('real PostgreSQL tenant security', () => {
       ]) {
         await admin.unsafe(statement);
       }
+
+      const importAcl = await admin<{ table_name: string; allowed: boolean }[]>`
+        select table_name,
+               has_table_privilege('portfolio_app', format('%I.%I', table_schema, table_name), 'SELECT,INSERT,UPDATE,DELETE') as allowed
+        from information_schema.tables
+        where table_schema = 'public'
+          and table_name in ('private_source_objects', 'source_documents', 'import_batches', 'source_records', 'staged_events', 'ledger_events')
+        order by table_name
+      `;
+      expect(importAcl).toHaveLength(6);
+      expect(importAcl.every((entry) => entry.allowed)).toBe(true);
 
       const sourceToken = 'postgres-device-source';
       const sourceHash = hashSessionToken(sourceToken);
@@ -339,11 +355,149 @@ postgresDescribe('real PostgreSQL tenant security', () => {
         }),
       ).rejects.toMatchObject({ code: '42501' });
 
-      const [catalog] = await admin<{ relrowsecurity: boolean; relforcerowsecurity: boolean }[]>`
-        select relrowsecurity, relforcerowsecurity
-        from pg_class where relname = 'broker_accounts'
+      const [userAAccount] = await admin<{ id: string }[]>`
+        select id from broker_accounts where owner_user_id = 'user-a'
       `;
-      expect(catalog).toEqual({ relrowsecurity: true, relforcerowsecurity: true });
+      const userAPrincipal = await resolveSessionPrincipal('import-user-a', {
+        findActiveUserByTokenHash: async () => 'user-a',
+      });
+      const importRepository = createImportRepository(
+        appDb,
+        createMemoryPrivateSourceStorage(),
+      );
+      const csv = new TextEncoder().encode([
+        '約定日,銘柄,銘柄コード,市場,取引,期限,預り,課税,約定数量,約定単価,手数料/諸経費等,税額,受渡日,受渡金額/決済損益',
+        '2026/07/01,合成銘柄,0000,東証,株式現物買,--,特定,申告,10,1000,--,--,2026/07/03,10000',
+        '2026/07/02,別の合成銘柄,1111,東証,株式現物買,--,特定,申告,20,500,--,--,2026/07/04,10000',
+        '2026/07/01,合成銘柄,0000,東証,株式現物買,--,特定,申告,10,1000,--,--,2026/07/03,10000',
+      ].join('\n'));
+      const simultaneousStages = await Promise.all([
+        importRepository.stageSbiTradeHistory({
+          principal: userAPrincipal!, brokerAccountId: userAAccount.id, mediaType: 'text/csv', bytes: csv,
+        }),
+        importRepository.stageSbiTradeHistory({
+          principal: userAPrincipal!, brokerAccountId: userAAccount.id, mediaType: 'text/csv', bytes: csv,
+        }),
+      ]);
+      const staged = simultaneousStages.find((result) => result.disposition === 'new')!;
+      expect(simultaneousStages.map((result) => result.disposition).sort()).toEqual(['duplicate', 'new']);
+      expect(new Set(simultaneousStages.map((result) => result.batchId))).toEqual(new Set([staged.batchId]));
+
+      const equivalentCsv = new TextEncoder().encode([
+        'synthetic metadata',
+        '約定日,銘柄,銘柄コード,市場,取引,期限,預り,課税,約定数量,約定単価,手数料/諸経費等,税額,受渡日,受渡金額/決済損益',
+        '2026/07/02,別の合成銘柄,1111,東証,株式現物買,--,特定,申告,020.00,0500.0,--,--,2026/07/04,010000.00',
+        '2026/07/01,合成銘柄,0000,東証,株式現物買,--,特定,申告,010.00,01000.0,--,--,2026/07/03,010000.00',
+      ].join('\n'));
+      const overlapping = await importRepository.stageSbiTradeHistory({
+        principal: userAPrincipal!, brokerAccountId: userAAccount.id, mediaType: 'text/csv', bytes: equivalentCsv,
+      });
+      expect(overlapping.disposition).toBe('new');
+      const concurrentCommits = await Promise.all([
+        importRepository.commitBatch({ principal: userAPrincipal!, batchId: staged.batchId }),
+        importRepository.commitBatch({ principal: userAPrincipal!, batchId: overlapping.batchId }),
+      ]);
+      expect(concurrentCommits.map((result) => result.committed).sort()).toEqual([0, 2]);
+      const simultaneousRetries = await Promise.all([
+        importRepository.commitBatch({ principal: userAPrincipal!, batchId: staged.batchId }),
+        importRepository.commitBatch({ principal: userAPrincipal!, batchId: staged.batchId }),
+      ]);
+      expect(new Set(simultaneousRetries.map((result) => result.committed)).size).toBe(1);
+      await expect(importRepository.stageSbiTradeHistory({
+        principal: userAPrincipal!,
+        brokerAccountId: userAAccount.id,
+        mediaType: 'text/csv',
+        bytes: csv,
+      })).resolves.toMatchObject({ disposition: 'duplicate' });
+      const userBPrincipal = await resolveSessionPrincipal('import-user-b', {
+        findActiveUserByTokenHash: async () => 'user-b',
+      });
+      await expect(importRepository.getBatchTrace({
+        principal: userBPrincipal!,
+        batchId: staged.batchId,
+      })).resolves.toBeNull();
+      const [ledgerCount] = await admin<{ count: number }[]>`
+        select count(*)::int as count from ledger_events
+      `;
+      expect(ledgerCount.count).toBe(2);
+
+      const [userBAccount] = await admin<{ id: string }[]>`
+        select id from broker_accounts where owner_user_id = 'user-b'
+      `;
+      await admin.unsafe(`
+        insert into private_source_objects
+          (id, owner_user_id, broker_account_id, storage_key, status)
+        values
+          ('b0000000-0000-4000-8000-000000000001', 'user-b', '${userBAccount.id}', 'synthetic/b/source', 'retained');
+        insert into source_documents
+          (id, owner_user_id, broker_account_id, content_sha256, media_type, byte_size, storage_key, document_type, status)
+        values
+          ('b0000000-0000-4000-8000-000000000001', 'user-b', '${userBAccount.id}', repeat('b', 64), 'text/csv', 1, 'synthetic/b/source', 'sbi_trade_history_csv', 'stored');
+        insert into import_batches
+          (id, owner_user_id, broker_account_id, source_document_id, parser_name, parser_version, status)
+        values
+          ('b0000000-0000-4000-8000-000000000002', 'user-b', '${userBAccount.id}', 'b0000000-0000-4000-8000-000000000001', 'synthetic', '1', 'preview_ready');
+        insert into source_records
+          (id, owner_user_id, batch_id, source_document_id, locator, source_row, record_sha256)
+        values
+          ('b0000000-0000-4000-8000-000000000003', 'user-b', 'b0000000-0000-4000-8000-000000000002', 'b0000000-0000-4000-8000-000000000001', 'csv:row:2', 2, repeat('c', 64));
+        insert into staged_events
+          (id, owner_user_id, broker_account_id, batch_id, source_record_id, status, reason_code, fingerprint)
+        values
+          ('b0000000-0000-4000-8000-000000000004', 'user-b', '${userBAccount.id}', 'b0000000-0000-4000-8000-000000000002', 'b0000000-0000-4000-8000-000000000003', 'needs_review', 'synthetic', repeat('d', 64));
+      `);
+      const [own] = await admin<{
+        source_document_id: string;
+        batch_id: string;
+        source_record_id: string;
+        staged_event_id: string;
+      }[]>`
+        select sd.id as source_document_id, ib.id as batch_id,
+               sr.id as source_record_id, se.id as staged_event_id
+        from source_documents sd
+        join import_batches ib on ib.source_document_id = sd.id
+        join source_records sr on sr.batch_id = ib.id
+        join staged_events se on se.source_record_id = sr.id
+        where sd.owner_user_id = 'user-a' and se.status = 'duplicate'
+        limit 1
+      `;
+      const crossOwnerStatements = [
+        `insert into private_source_objects (id, owner_user_id, broker_account_id, storage_key, status)
+         values ('a0000000-0000-4000-8000-000000000011', 'user-a', '${userBAccount.id}', 'synthetic/a/cross-account', 'pending_upload')`,
+        `insert into import_batches (id, owner_user_id, broker_account_id, source_document_id, parser_name, parser_version, status)
+         values ('a0000000-0000-4000-8000-000000000012', 'user-a', '${userAAccount.id}', 'b0000000-0000-4000-8000-000000000001', 'synthetic', '1', 'preview_ready')`,
+        `insert into source_records (id, owner_user_id, batch_id, source_document_id, locator, source_row, record_sha256)
+         values ('a0000000-0000-4000-8000-000000000013', 'user-a', 'b0000000-0000-4000-8000-000000000002', '${own.source_document_id}', 'csv:row:90', 90, repeat('e', 64))`,
+        `insert into source_records (id, owner_user_id, batch_id, source_document_id, locator, source_row, record_sha256)
+         values ('a0000000-0000-4000-8000-000000000014', 'user-a', '${own.batch_id}', 'b0000000-0000-4000-8000-000000000001', 'csv:row:91', 91, repeat('f', 64))`,
+        `insert into staged_events (id, owner_user_id, broker_account_id, batch_id, source_record_id, status, reason_code, fingerprint)
+         values ('a0000000-0000-4000-8000-000000000015', 'user-a', '${userAAccount.id}', 'b0000000-0000-4000-8000-000000000002', '${own.source_record_id}', 'needs_review', 'synthetic', repeat('1', 64))`,
+        `insert into staged_events (id, owner_user_id, broker_account_id, batch_id, source_record_id, status, reason_code, fingerprint)
+         values ('a0000000-0000-4000-8000-000000000016', 'user-a', '${userAAccount.id}', '${own.batch_id}', 'b0000000-0000-4000-8000-000000000003', 'needs_review', 'synthetic', repeat('2', 64))`,
+        `insert into ledger_events (owner_user_id, broker_account_id, staged_event_id, fingerprint, event_kind, payload)
+         values ('user-a', '${userBAccount.id}', '${own.staged_event_id}', repeat('3', 64), 'synthetic', '{}'::jsonb)`,
+        `insert into ledger_events (owner_user_id, broker_account_id, staged_event_id, fingerprint, event_kind, payload)
+         values ('user-a', '${userAAccount.id}', 'b0000000-0000-4000-8000-000000000004', repeat('4', 64), 'synthetic', '{}'::jsonb)`,
+      ];
+      for (const statement of crossOwnerStatements) {
+        await expect(app.begin(async (tx) => {
+          await tx`select set_config('app.current_user_id', 'user-a', true)`;
+          await tx.unsafe(statement);
+        })).rejects.toMatchObject({ code: '23503' });
+      }
+
+      const catalogs = await admin<{
+        relname: string;
+        relrowsecurity: boolean;
+        relforcerowsecurity: boolean;
+      }[]>`
+        select relname, relrowsecurity, relforcerowsecurity
+        from pg_class
+        where relname in ('broker_accounts', 'private_source_objects', 'source_documents', 'import_batches', 'source_records', 'staged_events', 'ledger_events')
+        order by relname
+      `;
+      expect(catalogs).toHaveLength(7);
+      expect(catalogs.every((catalog) => catalog.relrowsecurity && catalog.relforcerowsecurity)).toBe(true);
     } finally {
       await app.end();
       await revoker.end();

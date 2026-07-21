@@ -14,6 +14,41 @@ describe('initial migration', () => {
     );
   });
 
+  it('forces tenant RLS and grants only the runtime role on import tables', () => {
+    const sql = readFileSync(
+      'drizzle/20260721141351_dashing_pixie/migration.sql',
+      'utf8',
+    );
+    for (const table of [
+      'private_source_objects',
+      'source_documents',
+      'import_batches',
+      'source_records',
+      'staged_events',
+      'ledger_events',
+    ]) {
+      expect(sql).toContain(`ALTER TABLE "${table}" FORCE ROW LEVEL SECURITY;`);
+      expect(sql).toContain(`REVOKE ALL ON "${table}" FROM PUBLIC;`);
+    }
+    expect(sql).toContain(
+      'GRANT SELECT, INSERT, UPDATE, DELETE ON "private_source_objects", "source_documents", "import_batches", "source_records", "staged_events", "ledger_events" TO portfolio_app;',
+    );
+    for (const constraint of [
+      'private_source_objects_owner_broker_account_fk',
+      'source_documents_owner_broker_account_fk',
+      'source_documents_owner_account_storage_object_fk',
+      'import_batches_owner_broker_account_fk',
+      'import_batches_owner_account_source_document_fk',
+      'source_records_owner_batch_source_document_fk',
+      'staged_events_owner_account_batch_fk',
+      'staged_events_owner_record_batch_fk',
+      'ledger_events_owner_broker_account_fk',
+      'ledger_events_owner_account_staged_event_fk',
+    ]) {
+      expect(sql).toContain(`CONSTRAINT "${constraint}" FOREIGN KEY ("owner_user_id",`);
+    }
+  });
+
   it('applies cleanly with the expected app_metadata constraints', async () => {
     const db = new PGlite();
     try {

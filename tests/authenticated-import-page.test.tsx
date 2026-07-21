@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   resolvePageSessionPrincipal: vi.fn(),
+  getAuthRuntime: vi.fn(),
   redirect: vi.fn(),
 }));
 
 vi.mock('@/auth/page-session', () => ({
   resolvePageSessionPrincipal: mocks.resolvePageSessionPrincipal,
 }));
+vi.mock('@/auth/runtime', () => ({ getAuthRuntime: mocks.getAuthRuntime }));
 vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
 
 import SbiImportPage from '@/app/imports/sbi/page';
@@ -16,6 +18,10 @@ import SbiImportPage from '@/app/imports/sbi/page';
 describe('authenticated SBI import page', () => {
   beforeEach(() => {
     mocks.resolvePageSessionPrincipal.mockReset();
+    mocks.getAuthRuntime.mockReset();
+    mocks.getAuthRuntime.mockResolvedValue({
+      repository: { listBrokerAccounts: vi.fn().mockResolvedValue([]) },
+    });
     mocks.redirect.mockReset();
     mocks.redirect.mockImplementation(() => { throw new Error('NEXT_REDIRECT'); });
   });

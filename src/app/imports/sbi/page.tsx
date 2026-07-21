@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { resolvePageSessionPrincipal } from '@/auth/page-session';
+import { getAuthRuntime } from '@/auth/runtime';
 import SbiImportClient from './import-client';
 
 export const metadata: Metadata = {
@@ -12,6 +13,9 @@ export const metadata: Metadata = {
 export default async function SbiImportPage() {
   const principal = await resolvePageSessionPrincipal();
   if (!principal) return redirect('/login');
+  const { repository } = await getAuthRuntime();
+  const accounts = (await repository.listBrokerAccounts(principal))
+    .filter((account) => account.broker === 'sbi');
 
   return (
     <main className="import-shell">
@@ -20,7 +24,7 @@ export default async function SbiImportPage() {
         <h1 id="sbi-import-title">SBI CSV取込</h1>
         <p>この画面内でCSVを確認します</p>
         <p><Link href="/settings/devices">スマホでも同じアカウントを使う</Link></p>
-        <SbiImportClient />
+        <SbiImportClient initialAccounts={accounts} />
       </section>
     </main>
   );

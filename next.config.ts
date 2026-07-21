@@ -2,7 +2,7 @@ import type { NextConfig } from 'next';
 
 const importContentSecurityPolicy = [
   "default-src 'self'",
-  "connect-src 'none'",
+  "connect-src 'self'",
   "script-src 'self' 'unsafe-inline'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
@@ -43,6 +43,7 @@ const nextConfig: NextConfig = {
         headers: [
           { key: 'Content-Security-Policy', value: importContentSecurityPolicy },
           { key: 'Referrer-Policy', value: 'no-referrer' },
+          { key: 'Cache-Control', value: 'no-store' },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
         ],
       },

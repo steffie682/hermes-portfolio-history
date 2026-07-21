@@ -10,7 +10,7 @@
 # User financial data and imported documents
 data/
 uploads/
-imports/
+/imports/
 originals/
 backups/
 *.csv
@@ -42,7 +42,7 @@ tsconfig.tsbuildinfo
 *.db
 *.sqlite
 *.sqlite3
-storage/
+/storage/
 minio-data/
 
 # Editors and OS

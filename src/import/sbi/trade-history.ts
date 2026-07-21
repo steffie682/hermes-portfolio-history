@@ -199,7 +199,13 @@ function normalizedDecimal(value: string): string | null {
     : /^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/;
   if (!groupingPattern.test(candidate)) return null;
   const withoutSeparators = candidate.replaceAll(',', '');
-  return parenthesized ? `-${withoutSeparators}` : withoutSeparators.replace(/^\+/, '');
+  const negative = Boolean(parenthesized) || withoutSeparators.startsWith('-');
+  const unsigned = withoutSeparators.replace(/^[+-]/, '');
+  const [integerPart, fractionPart = ''] = unsigned.split('.');
+  const integer = integerPart.replace(/^0+(?=\d)/, '');
+  const fraction = fractionPart.replace(/0+$/, '');
+  const magnitude = fraction ? `${integer}.${fraction}` : integer;
+  return /^0(?:\.0*)?$/.test(magnitude) ? '0' : `${negative ? '-' : ''}${magnitude}`;
 }
 
 function requiredDecimal(value: string, rowNumber: number, column: string): string {
@@ -210,8 +216,21 @@ function requiredDecimal(value: string, rowNumber: number, column: string): stri
   return normalized;
 }
 
+function rejectDisallowedControlCharacters(text: string) {
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(text)) {
+    throw new Error('SBI約定履歴CSVに許可されていない制御文字が含まれています');
+  }
+}
+
+function rejectUnsafeParsedFields(values: string[]) {
+  if (values.some((value) => /[\u0000-\u001f\u007f-\u009f]|\p{Bidi_Control}/u.test(value))) {
+    throw new Error('SBI約定履歴CSVに許可されていない制御文字が含まれています');
+  }
+}
+
 export function parseSbiTradeHistory(source: Uint8Array): ParsedSbiTradeHistory {
   const decoded = decodeSource(source);
+  rejectDisallowedControlCharacters(decoded.text);
   const csvRecords = parseCsv(decoded.text);
   const headerIndex = csvRecords.findIndex((record) => isHeader(record.values));
   if (headerIndex < 0) {
@@ -230,6 +249,7 @@ export function parseSbiTradeHistory(source: Uint8Array): ParsedSbiTradeHistory 
   const rows = dataRecords.slice(0, dataEnd).map((record): SbiTradeHistoryRow => {
     const sourceRowNumber = record.lineNumber;
     const values = record.values;
+    rejectUnsafeParsedFields(values);
     if (values.every((value) => value.length === 0)) {
       throw new Error(`SBI約定履歴CSVの${sourceRowNumber}行目: 空行は取り込めません`);
     }
