@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { extractPdfStructure } from '@/import/sbi/pdf-structure-extractor';
-import { buildSbiIncomeStructureSafeReport } from '@/import/sbi/balance-report-safe-report';
+import {
+  buildSbiBalanceReportSafeReport,
+  buildSbiIncomeStructureSafeReport,
+} from '@/import/sbi/balance-report-safe-report';
 
 const OPS = {
   save: 10,
@@ -112,7 +115,9 @@ describe('PDF structure extractor', () => {
     const serialized = JSON.stringify(report);
 
     expect(pages[0]).toMatchObject({ extractionMode: 'operator-glyphs', rawItemCount: 3,
-      discardedItemCount: 0, textPaintOperatorCount: 3, totalOperatorCount: 9 });
+      discardedItemCount: 0, textPaintOperatorCount: 3, totalOperatorCount: 9,
+      operatorGlyphEntryCount: 24, operatorUnicodeGlyphCount: 23,
+      operatorFontCharFallbackCount: 0 });
     expect(report.pages[0].items).toEqual([
       expect.objectContaining({ kind: 'known-label', labels: ['分配金額'], x: 10, y: 30, width: 20, height: 10 }),
       expect.objectContaining({ kind: 'date', x: 110, y: 30, width: 60, height: 10 }),
@@ -121,11 +126,52 @@ describe('PDF structure extractor', () => {
     for (const canary of ['CANARY', '2026', '1,234', '秘密名']) expect(serialized).not.toContain(canary);
   });
 
-  it('keeps operator-only diagnostics as none when showText has no usable unicode', async () => {
-    const glyph = { width: 500, fontChar: 'CANARY_FONT_CHAR' };
+  it('uses normalized fontChar only when unicode is empty and emits privacy-safe fallback diagnostics', async () => {
+    const unrelated = vi.fn(() => { throw new Error('CANARY_UNRELATED_GETTER'); });
+    const glyphs = [...'取引残高報告書'].map((fontChar) => Object.defineProperties({
+      unicode: '', fontChar, width: 500, isSpace: false,
+    }, {
+      originalCharCode: { get: unrelated }, operatorListId: { get: unrelated }, accent: { get: unrelated },
+    }));
+    const { loader } = operatorLoader([OPS.showText], {}, [[glyphs]]);
+
+    const pages = await extractPdfStructure(
+      new Uint8Array([1]), loader, undefined, OPS, (value) => value.normalize('NFKC'),
+    );
+    const report = buildSbiBalanceReportSafeReport(pages);
+    const serialized = JSON.stringify(report);
+
+    expect(pages[0]).toMatchObject({
+      extractionMode: 'operator-glyphs', operatorGlyphEntryCount: glyphs.length,
+      operatorUnicodeGlyphCount: 0, operatorFontCharFallbackCount: glyphs.length,
+    });
+    expect(report.pages[0].items).toEqual([
+      expect.objectContaining({ kind: 'known-label', labels: ['取引残高報告書'] }),
+    ]);
+    expect(unrelated).not.toHaveBeenCalled();
+    for (const value of ['fontChar', 'CANARY']) expect(serialized).not.toContain(value);
+  });
+
+  it('prefers usable normalized unicode without reading fontChar or unrelated glyph fields', async () => {
+    const unread = () => { throw new Error('CANARY_GLYPH_FIELD'); };
+    const glyph = Object.defineProperties({ unicode: '分配金額', width: 0, isSpace: false }, {
+      fontChar: { get: unread }, originalCharCode: { get: unread }, operatorListId: { get: unread },
+      accent: { get: unread },
+    });
+    const { loader } = operatorLoader([OPS.showText], {}, [[[glyph]]]);
+    const [page] = await extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS);
+
+    expect(page).toMatchObject({ extractionMode: 'operator-glyphs', operatorGlyphEntryCount: 1,
+      operatorUnicodeGlyphCount: 1, operatorFontCharFallbackCount: 0 });
+  });
+
+  it('keeps operator-only diagnostics as none when showText has no usable unicode or fontChar', async () => {
+    const glyph = { width: 500, fontChar: 7 };
     const { loader } = operatorLoader([OPS.showText], {}, [[[glyph, 120, null]]]);
     const [page] = await extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS);
-    expect(page).toMatchObject({ extractionMode: 'none', rawItemCount: 0, items: [] });
+    expect(page).toMatchObject({ extractionMode: 'none', rawItemCount: 0, items: [],
+      operatorGlyphEntryCount: 3, operatorUnicodeGlyphCount: 0,
+      operatorFontCharFallbackCount: 0 });
   });
 
   it('rejects mismatched operator arrays before reading an operand', async () => {
@@ -166,10 +212,65 @@ describe('PDF structure extractor', () => {
       .rejects.toThrow('構造が大きすぎます');
   });
 
+  it('fails the normalized text budget before reading width or isSpace', async () => {
+    const later = Object.defineProperties({ unicode: 'x' }, {
+      width: { get: () => { throw new Error('CANARY_LATE_WIDTH'); } },
+      isSpace: { get: () => { throw new Error('CANARY_LATE_SPACE'); } },
+    });
+    const { loader } = operatorLoader([OPS.showText, OPS.showText], {}, [
+      [[{ unicode: 'a'.repeat(2_000_000), width: 0 }]], [[later]],
+    ]);
+    await expect(extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS))
+      .rejects.toThrow('構造が大きすぎます');
+  });
+
   it('aborts during glyph traversal and destroys once', async () => {
     const controller = new AbortController();
     const first = { get unicode() { controller.abort(); return 'a'; }, width: 500 };
     const { loader, destroy } = operatorLoader([OPS.showText], {}, [[[first, { unicode: 'b', width: 500 }]]]);
+    await expect(extractPdfStructure(new Uint8Array([1]), loader, controller.signal, OPS))
+      .rejects.toHaveProperty('name', 'AbortError');
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('aborts after normalizing the final operator glyph and destroys once', async () => {
+    const controller = new AbortController();
+    const normalizeUnicode = vi.fn((value: string) => {
+      controller.abort();
+      return value;
+    });
+    const { loader, destroy } = operatorLoader(
+      [OPS.showText], {}, [[[{ unicode: 'a', width: 500 }]]],
+    );
+
+    await expect(extractPdfStructure(
+      new Uint8Array([1]), loader, controller.signal, OPS, normalizeUnicode,
+    )).rejects.toHaveProperty('name', 'AbortError');
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('aborts after reading final operator glyph width without reading isSpace and destroys once', async () => {
+    const controller = new AbortController();
+    const isSpace = vi.fn(() => false);
+    const glyph = Object.defineProperties({ unicode: 'a' }, {
+      width: { get: () => { controller.abort(); return 500; } },
+      isSpace: { get: isSpace },
+    });
+    const { loader, destroy } = operatorLoader([OPS.showText], {}, [[[glyph]]]);
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader, controller.signal, OPS))
+      .rejects.toHaveProperty('name', 'AbortError');
+    expect(isSpace).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('aborts after reading final operator glyph isSpace and destroys once', async () => {
+    const controller = new AbortController();
+    const glyph = Object.defineProperties({ unicode: 'a', width: 500 }, {
+      isSpace: { get: () => { controller.abort(); return false; } },
+    });
+    const { loader, destroy } = operatorLoader([OPS.showText], {}, [[[glyph]]]);
+
     await expect(extractPdfStructure(new Uint8Array([1]), loader, controller.signal, OPS))
       .rejects.toHaveProperty('name', 'AbortError');
     expect(destroy).toHaveBeenCalledOnce();

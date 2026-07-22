@@ -17,6 +17,9 @@ export interface PdfStructurePage {
   imagePaintOperatorCount?: number;
   pathOperatorCount?: number;
   totalOperatorCount?: number;
+  operatorGlyphEntryCount?: number;
+  operatorUnicodeGlyphCount?: number;
+  operatorFontCharFallbackCount?: number;
   items: PdfStructureItem[];
 }
 
@@ -43,6 +46,7 @@ const INCOME_STRUCTURE_LABELS = [
 const MAX_PAGES = 100;
 const MAX_ITEMS = 20_000;
 const MAX_OPERATORS = 200_000;
+const MAX_OPERATOR_GLYPH_ENTRIES = 20_000;
 
 function rounded(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -92,12 +96,21 @@ function buildSafeReport<TDocumentKind extends string>(
       page.imagePaintOperatorCount,
       page.pathOperatorCount,
       page.totalOperatorCount,
+      page.operatorGlyphEntryCount,
+      page.operatorUnicodeGlyphCount,
+      page.operatorFontCharFallbackCount,
     ];
     const hasOperatorDiagnostics = operatorValues.some((value) => value !== undefined);
-    if (hasOperatorDiagnostics && (!operatorValues.every((value) => Number.isInteger(value)
+    const paintValues = operatorValues.slice(0, 4);
+    const glyphValues = operatorValues.slice(4);
+    if (hasOperatorDiagnostics && (!paintValues.every((value) => Number.isInteger(value)
       && (value as number) >= 0 && (value as number) <= MAX_OPERATORS)
+      || !glyphValues.every((value) => Number.isInteger(value)
+        && (value as number) >= 0 && (value as number) <= MAX_OPERATOR_GLYPH_ENTRIES)
       || (page.textPaintOperatorCount as number) + (page.imagePaintOperatorCount as number)
-        + (page.pathOperatorCount as number) > (page.totalOperatorCount as number))) {
+        + (page.pathOperatorCount as number) > (page.totalOperatorCount as number)
+      || (page.operatorUnicodeGlyphCount as number) + (page.operatorFontCharFallbackCount as number)
+        > (page.operatorGlyphEntryCount as number))) {
       throw new Error('SBI取引残高報告書PDFの構造が大きすぎます');
     }
     return {
@@ -108,6 +121,9 @@ function buildSafeReport<TDocumentKind extends string>(
         imagePaintOperatorCount: page.imagePaintOperatorCount as number,
         pathOperatorCount: page.pathOperatorCount as number,
         totalOperatorCount: page.totalOperatorCount as number,
+        operatorGlyphEntryCount: page.operatorGlyphEntryCount as number,
+        operatorUnicodeGlyphCount: page.operatorUnicodeGlyphCount as number,
+        operatorFontCharFallbackCount: page.operatorFontCharFallbackCount as number,
       } : {}),
     };
   });
@@ -116,8 +132,12 @@ function buildSafeReport<TDocumentKind extends string>(
     (total, page) => total + ('totalOperatorCount' in page ? (page.totalOperatorCount ?? 0) : 0),
     0,
   );
+  const operatorGlyphEntryCount = pageDiagnostics.reduce(
+    (total, page) => total + ('operatorGlyphEntryCount' in page ? (page.operatorGlyphEntryCount ?? 0) : 0),
+    0,
+  );
   if (pages.length > MAX_PAGES || itemCount > MAX_ITEMS || rawItemCount > MAX_ITEMS
-    || totalOperatorCount > MAX_OPERATORS) {
+    || totalOperatorCount > MAX_OPERATORS || operatorGlyphEntryCount > MAX_OPERATOR_GLYPH_ENTRIES) {
     throw new Error('SBI取引残高報告書PDFの構造が大きすぎます');
   }
   return {

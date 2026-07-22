@@ -151,12 +151,15 @@ function extractOperatorGlyphItems(
   remainingGlyphs: number,
   onText: (length: number) => void,
   normalizeUnicode: (value: string) => string,
-): { items: PdfStructurePage['items']; glyphCount: number } {
+): { items: PdfStructurePage['items']; glyphCount: number; unicodeGlyphCount: number;
+  fontCharFallbackCount: number } {
   if (!Array.isArray(argsArray) || argsArray.length !== fnArray.length) {
     throw new Error(STRUCTURE_TOO_LARGE_ERROR);
   }
   const items: PdfStructurePage['items'] = [];
   let glyphCount = 0;
+  let unicodeGlyphCount = 0;
+  let fontCharFallbackCount = 0;
   let state: OperatorState = {
     ctm: [...IDENTITY_MATRIX], textMatrix: [...IDENTITY_MATRIX], x: 0, y: 0, lineX: 0, lineY: 0,
     fontSize: 0, fontDirection: 1, charSpacing: 0, wordSpacing: 0,
@@ -188,15 +191,36 @@ function extractOperatorGlyphItems(
           continue;
         }
         if (!glyph || typeof glyph !== 'object' || Array.isArray(glyph)) continue;
-        const unicode = (glyph as { unicode?: unknown }).unicode;
+        const candidate = glyph as { unicode?: unknown; fontChar?: unknown; width?: unknown; isSpace?: unknown };
+        const unicode = candidate.unicode;
         signal?.throwIfAborted();
-        if (typeof unicode !== 'string') continue;
-        const normalized = normalizeUnicode(unicode);
-        if (typeof normalized !== 'string') throw new Error(STRUCTURE_TOO_LARGE_ERROR);
+        let normalized: string | undefined;
+        let source: 'unicode' | 'fontChar' | undefined;
+        if (typeof unicode === 'string') {
+          const value = normalizeUnicode(unicode);
+          signal?.throwIfAborted();
+          if (typeof value !== 'string') throw new Error(STRUCTURE_TOO_LARGE_ERROR);
+          if (value.length > 0) { normalized = value; source = 'unicode'; }
+        }
+        if (normalized === undefined) {
+          const fontChar = candidate.fontChar;
+          signal?.throwIfAborted();
+          if (typeof fontChar !== 'string') continue;
+          const value = normalizeUnicode(fontChar);
+          signal?.throwIfAborted();
+          if (typeof value !== 'string') throw new Error(STRUCTURE_TOO_LARGE_ERROR);
+          if (value.length === 0) continue;
+          normalized = value;
+          source = 'fontChar';
+        }
         onText(normalized.length);
+        if (source === 'unicode') unicodeGlyphCount += 1;
+        else fontCharFallbackCount += 1;
         text += normalized;
-        const glyphWidth = (glyph as { width?: unknown }).width;
-        const isSpace = (glyph as { isSpace?: unknown }).isSpace;
+        const glyphWidth = candidate.width;
+        signal?.throwIfAborted();
+        const isSpace = candidate.isSpace;
+        signal?.throwIfAborted();
         if (finiteNumber(glyphWidth)) {
           const glyphAdvance = (glyphWidth * state.fontSize / 1000 + state.charSpacing
             + (isSpace === true ? state.wordSpacing : 0)) * state.textHScale * state.fontDirection;
@@ -264,7 +288,7 @@ function extractOperatorGlyphItems(
       if (stack.length > 0) state = stack.pop()!;
     }
   }
-  return { items, glyphCount };
+  return { items, glyphCount, unicodeGlyphCount, fontCharFallbackCount };
 }
 
 function countPaintOperators(fnArray: unknown[], codes: OperatorCodeSets, remaining: number) {
@@ -564,7 +588,9 @@ export async function extractPdfStructure(
           }
         }
       }
-      let operatorDiagnostics: ReturnType<typeof countPaintOperators> | undefined;
+      let operatorDiagnostics: (ReturnType<typeof countPaintOperators> & Pick<PdfStructurePage,
+        'operatorGlyphEntryCount' | 'operatorUnicodeGlyphCount' | 'operatorFontCharFallbackCount'>)
+        | undefined;
       if (items.length === 0 && page.getOperatorList && paintOperatorCodes) {
         const operatorListPromise = page.getOperatorList();
         const operatorList = await (signal ? Promise.race([operatorListPromise, aborted]) : operatorListPromise);
@@ -596,6 +622,12 @@ export async function extractPdfStructure(
           normalizeUnicode,
         );
         operatorGlyphCount += glyphExtraction.glyphCount;
+        operatorDiagnostics = {
+          ...operatorDiagnostics,
+          operatorGlyphEntryCount: glyphExtraction.glyphCount,
+          operatorUnicodeGlyphCount: glyphExtraction.unicodeGlyphCount,
+          operatorFontCharFallbackCount: glyphExtraction.fontCharFallbackCount,
+        };
         if (glyphExtraction.items.length > 0) {
           items.push(...glyphExtraction.items);
           extractionMode = 'operator-glyphs';

@@ -6,14 +6,39 @@ describe('SBI balance report safe structure', () => {
     const report = buildSbiBalanceReportSafeReport([{
       pageNumber: 1, width: 600, height: 320, extractionMode: 'none', items: [],
       textPaintOperatorCount: 4, imagePaintOperatorCount: 8, pathOperatorCount: 2,
-      totalOperatorCount: 16,
+      totalOperatorCount: 16, operatorGlyphEntryCount: 9,
+      operatorUnicodeGlyphCount: 7, operatorFontCharFallbackCount: 2,
     }]);
 
     expect(report.pages[0]).toMatchObject({
       textPaintOperatorCount: 4, imagePaintOperatorCount: 8,
-      pathOperatorCount: 2, totalOperatorCount: 16,
+      pathOperatorCount: 2, totalOperatorCount: 16, operatorGlyphEntryCount: 9,
+      operatorUnicodeGlyphCount: 7, operatorFontCharFallbackCount: 2,
     });
     expect(JSON.stringify(report)).not.toContain('undefined');
+  });
+
+  it.each([
+    { operatorGlyphEntryCount: 1 },
+    { operatorGlyphEntryCount: 1, operatorUnicodeGlyphCount: 1 },
+    { operatorGlyphEntryCount: 1, operatorUnicodeGlyphCount: 1, operatorFontCharFallbackCount: 1 },
+    { operatorGlyphEntryCount: 20_001, operatorUnicodeGlyphCount: 0, operatorFontCharFallbackCount: 0 },
+    { operatorGlyphEntryCount: 1.5, operatorUnicodeGlyphCount: 0, operatorFontCharFallbackCount: 0 },
+  ])('rejects partial or malformed glyph diagnostics %#', (diagnostics) => {
+    expect(() => buildSbiBalanceReportSafeReport([{
+      pageNumber: 1, width: 600, height: 320, items: [],
+      textPaintOperatorCount: 1, imagePaintOperatorCount: 0, pathOperatorCount: 0,
+      totalOperatorCount: 1, ...diagnostics,
+    }])).toThrow('構造が大きすぎます');
+  });
+
+  it('rejects aggregate operator glyph entries above 20,000', () => {
+    expect(() => buildSbiBalanceReportSafeReport([1, 2].map((pageNumber) => ({
+      pageNumber, width: 600, height: 320, items: [],
+      textPaintOperatorCount: 1, imagePaintOperatorCount: 0, pathOperatorCount: 0,
+      totalOperatorCount: 1, operatorGlyphEntryCount: 10_001,
+      operatorUnicodeGlyphCount: 0, operatorFontCharFallbackCount: 0,
+    })))).toThrow('構造が大きすぎます');
   });
 
   it.each([NaN, -1, 1.5, 200_001])('rejects an invalid operator diagnostic %s', (invalid) => {
