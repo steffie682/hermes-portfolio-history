@@ -33,6 +33,17 @@ function deferred<T>() {
 afterEach(() => cleanup());
 
 describe('SBI distribution report client', () => {
+  it('explains which single PDF to choose before the single-file input', () => {
+    render(<SbiDistributionReportClient inspectPdf={vi.fn()} />);
+
+    const input = screen.getByLabelText('SBI分配金・再投資PDF');
+    expect(input.hasAttribute('multiple')).toBe(false);
+    const guidance = screen.getByText(/取引履歴CSVで「分配金再投資」と表示されている取引/);
+    expect(guidance.textContent).toContain('対応するSBIのPDFを1つだけ');
+    expect(guidance.textContent).toContain('最初の形式確認では、その中で最新のもの');
+    expect(guidance.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('shows a safe structure result and fixed-name artifact without source canaries', async () => {
     render(<SbiDistributionReportClient inspectPdf={vi.fn().mockResolvedValue(safeReport)} />);
     choose(pdfFile());
@@ -45,6 +56,20 @@ describe('SBI distribution report client', () => {
     expect(artifact).toContain('sbi-income-structure');
     expect(artifact).not.toContain('CANARY_SOURCE_FILENAME');
     expect(document.body.textContent).not.toContain('CANARY_SOURCE_FILENAME');
+  });
+
+  it('states the successful report boundary and asks to share only safe JSON', async () => {
+    render(<SbiDistributionReportClient inspectPdf={vi.fn().mockResolvedValue(safeReport)} />);
+    choose(pdfFile());
+
+    expect(await screen.findByText('PDF 1ページ')).toBeTruthy();
+    const boundary = screen.getByText(/この結果で確認できるのはPDFのレイアウトだけです/);
+    for (const unresolved of ['分配金額', '税金', '取得価額', '再投資の会計処理', '保留中のインポート状態']) {
+      expect(boundary.textContent).toContain(unresolved);
+    }
+    expect(boundary.textContent).toContain('まだ解決しません');
+    expect(screen.getByText(/安全なJSONだけを共有した後、実装を続けられます/)).toBeTruthy();
+    expect(screen.queryByText(/元のPDFを共有/)).toBeNull();
   });
 
   it('rejects an oversized file before reading it', async () => {

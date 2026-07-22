@@ -68,7 +68,7 @@ export async function extractPdfStructure(
     signal?.throwIfAborted();
     const document = await (signal ? Promise.race([loadingTask.promise, aborted]) : loadingTask.promise);
     signal?.throwIfAborted();
-    if (document.numPages < 1 || document.numPages > MAX_PAGES) {
+    if (!Number.isInteger(document.numPages) || document.numPages < 1 || document.numPages > MAX_PAGES) {
       throw new Error('SBI取引残高報告書PDFのページ数を確認できません');
     }
     const pages: PdfStructurePage[] = [];

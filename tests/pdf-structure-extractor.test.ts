@@ -73,6 +73,21 @@ describe('PDF structure extractor', () => {
     expect(destroy).toHaveBeenCalledOnce();
   });
 
+  it.each([Number.NaN, 1.5])(
+    'rejects invalid page count %s and destroys the PDF document once',
+    async (numPages) => {
+      const destroy = vi.fn().mockResolvedValue(undefined);
+      const loader = vi.fn(() => ({ destroy, promise: Promise.resolve({
+        numPages,
+        getPage: vi.fn(),
+      }) }));
+
+      await expect(extractPdfStructure(new Uint8Array([1, 2, 3]), loader))
+        .rejects.toThrow('SBI取引残高報告書PDFのページ数を確認できません');
+      expect(destroy).toHaveBeenCalledOnce();
+    },
+  );
+
   it('rejects excessive raw content items and destroys the PDF document', async () => {
     const destroy = vi.fn().mockResolvedValue(undefined);
     const loader = vi.fn(() => ({ destroy, promise: Promise.resolve({

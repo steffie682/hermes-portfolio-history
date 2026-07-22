@@ -87,6 +87,10 @@ export default function SbiDistributionReportClient({
   return (
     <>
       <div className="import-file-panel">
+        <p>
+          取引履歴CSVで「分配金再投資」と表示されている取引に対応するSBIのPDFを1つだけ選んでください。
+          最初の形式確認では、その中で最新のものを選んでください。
+        </p>
         <label htmlFor="sbi-distribution-report-pdf">SBI分配金・再投資PDF</label>
         <input id="sbi-distribution-report-pdf" type="file" accept=".pdf,application/pdf" onChange={handleFileChange} />
         <strong>PDFは送信されません</strong>
@@ -106,7 +110,11 @@ export default function SbiDistributionReportClient({
           <a className="safe-report-download" download="sbi-distribution-safe-structure.json" href={reportHref}>
             安全な構造レポートを保存
           </a>
-          <p className="preview-note">元PDFではなく、保存した安全なJSONだけを共有できます。</p>
+          <p className="preview-note">
+            この結果で確認できるのはPDFのレイアウトだけです。分配金額、税金、取得価額、再投資の会計処理、
+            保留中のインポート状態はまだ解決しません。
+          </p>
+          <p className="preview-note">保存した安全なJSONだけを共有した後、実装を続けられます。</p>
         </section>
       ) : null}
     </>
