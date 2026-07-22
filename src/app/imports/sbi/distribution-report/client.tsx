@@ -18,6 +18,7 @@ async function inspectPdfInBrowser(source: Uint8Array, signal: AbortSignal): Pro
     pdfjs.getDocument as unknown as PdfDocumentLoader,
     signal,
     pdfjs.OPS,
+    pdfjs.normalizeUnicode,
   );
   return buildSbiIncomeStructureSafeReport(pages);
 }

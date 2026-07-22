@@ -3,6 +3,21 @@ import { extractPdfStructure } from '@/import/sbi/pdf-structure-extractor';
 import { buildSbiIncomeStructureSafeReport } from '@/import/sbi/balance-report-safe-report';
 
 const OPS = {
+  save: 10,
+  restore: 11,
+  transform: 12,
+  beginText: 31,
+  endText: 32,
+  setCharSpacing: 33,
+  setWordSpacing: 34,
+  setHScale: 35,
+  setLeading: 36,
+  setFont: 37,
+  setTextRise: 38,
+  moveText: 40,
+  setLeadingMoveText: 41,
+  setTextMatrix: 42,
+  nextLine: 43,
   showText: 44,
   showSpacedText: 45,
   nextLineShowText: 46,
@@ -19,9 +34,13 @@ const OPS = {
 };
 
 describe('PDF structure extractor', () => {
-  function operatorLoader(fnArray: unknown[], overrides: Record<string, unknown> = {}) {
+  function operatorLoader(
+    fnArray: unknown[],
+    overrides: Record<string, unknown> = {},
+    argsArray: unknown[] = Array.from({ length: fnArray.length }, () => []),
+  ) {
     const destroy = vi.fn().mockResolvedValue(undefined);
-    const getOperatorList = vi.fn().mockResolvedValue({ fnArray });
+    const getOperatorList = vi.fn().mockResolvedValue({ fnArray, argsArray });
     const loader = vi.fn(() => ({ destroy, promise: Promise.resolve({
       numPages: 1,
       getPage: vi.fn().mockResolvedValue({
@@ -36,8 +55,8 @@ describe('PDF structure extractor', () => {
     return { destroy, getOperatorList, loader };
   }
 
-  it('counts only mixed text, image, and path paint operators without reading operands', async () => {
-    const getArgsArray = vi.fn(() => { throw new Error('CANARY_ARGS_ARRAY_WAS_READ'); });
+  it('counts mixed text, image, and path paint operators while reading only showText operands', async () => {
+    const unknownArgs = { get 0() { throw new Error('CANARY_UNKNOWN_ARGS_WAS_READ'); } };
     const operatorList = {
       fnArray: [
         OPS.showText, OPS.showSpacedText, OPS.nextLineShowText, OPS.nextLineSetSpacingShowText,
@@ -46,7 +65,8 @@ describe('PDF structure extractor', () => {
         OPS.paintImageMaskXObjectRepeat, OPS.paintSolidColorImageMask,
         OPS.constructPath, OPS.constructPath, 999,
       ],
-      get argsArray() { return getArgsArray(); },
+      argsArray: [[], [], [], [], unknownArgs, unknownArgs, unknownArgs, unknownArgs, unknownArgs,
+        unknownArgs, unknownArgs, unknownArgs, unknownArgs, unknownArgs, unknownArgs],
     };
     const { loader } = operatorLoader([], {
       getOperatorList: vi.fn().mockResolvedValue(operatorList),
@@ -62,8 +82,213 @@ describe('PDF structure extractor', () => {
     expect(JSON.parse(safeJson).pages[0]).toMatchObject({
       textPaintOperatorCount: 4, imagePaintOperatorCount: 8, pathOperatorCount: 2, totalOperatorCount: 15,
     });
-    expect(getArgsArray).not.toHaveBeenCalled();
     expect(safeJson).not.toContain('CANARY');
+  });
+
+  it('does not read any operands when no allowlisted text/state operator exists', async () => {
+    const unread = { get 0() { throw new Error('CANARY_OPERAND_WAS_READ'); } };
+    const { loader } = operatorLoader([OPS.paintImageXObject, 999], {}, [unread, unread]);
+    const [page] = await extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS);
+    expect(page).toMatchObject({ extractionMode: 'none', totalOperatorCount: 2 });
+  });
+
+  it('extracts normalized showText glyphs into coarse safe geometry and classifications', async () => {
+    const glyphs = (text: string) => [...text].map((unicode) => {
+      const glyph = { unicode, width: 500 };
+      Object.defineProperties(glyph, {
+        fontChar: { get: () => { throw new Error('CANARY_FONT_CHAR'); } },
+        payload: { get: () => { throw new Error('CANARY_PAYLOAD'); } },
+      });
+      return glyph;
+    });
+    const fnArray = [OPS.beginText, OPS.setFont, OPS.setTextMatrix, OPS.showText,
+      OPS.moveText, OPS.showText, OPS.setLeadingMoveText, OPS.showText, OPS.endText];
+    const argsArray = [[], ['CANARY_FONT_ID', 12], [new Float32Array([1, 0, 0, 1, 13, 27])], [glyphs('分配金額')],
+      [97, 0], [glyphs('2026年7月18日')], [0, -18], [[...glyphs('1,234円'), -120, ...glyphs('秘密名')]], []];
+    const { loader } = operatorLoader(fnArray, {}, argsArray);
+
+    const pages = await extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS);
+    const report = buildSbiIncomeStructureSafeReport(pages);
+    const serialized = JSON.stringify(report);
+
+    expect(pages[0]).toMatchObject({ extractionMode: 'operator-glyphs', rawItemCount: 3,
+      discardedItemCount: 0, textPaintOperatorCount: 3, totalOperatorCount: 9 });
+    expect(report.pages[0].items).toEqual([
+      expect.objectContaining({ kind: 'known-label', labels: ['分配金額'], x: 10, y: 30, width: 20, height: 10 }),
+      expect.objectContaining({ kind: 'date', x: 110, y: 30, width: 60, height: 10 }),
+      expect.objectContaining({ kind: 'masked-text', x: 110, y: 10, width: 60, height: 10 }),
+    ]);
+    for (const canary of ['CANARY', '2026', '1,234', '秘密名']) expect(serialized).not.toContain(canary);
+  });
+
+  it('keeps operator-only diagnostics as none when showText has no usable unicode', async () => {
+    const glyph = { width: 500, fontChar: 'CANARY_FONT_CHAR' };
+    const { loader } = operatorLoader([OPS.showText], {}, [[[glyph, 120, null]]]);
+    const [page] = await extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS);
+    expect(page).toMatchObject({ extractionMode: 'none', rawItemCount: 0, items: [] });
+  });
+
+  it('rejects mismatched operator arrays before reading an operand', async () => {
+    const argsArray: unknown[] = new Array(2);
+    Object.defineProperty(argsArray, 0, { get: () => { throw new Error('CANARY_LATE_ARG'); } });
+    const { loader } = operatorLoader([OPS.showText], {}, argsArray);
+    await expect(extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS))
+      .rejects.toThrow('構造が大きすぎます');
+  });
+
+  it('handles cyclic/malformed glyph entries without recursive traversal', async () => {
+    const glyphs: unknown[] = [null, 100, { unicode: 7, width: 500 }];
+    glyphs.push(glyphs);
+    const { loader } = operatorLoader([OPS.showText], {}, [[glyphs]]);
+    const [page] = await extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS);
+    expect(page).toMatchObject({ extractionMode: 'none', items: [] });
+  });
+
+  it('accepts exactly 20,000 glyph entries and rejects 20,001 before reading one', async () => {
+    const exact = Array.from({ length: 20_000 }, () => 10);
+    const oversized = new Array(20_001);
+    Object.defineProperty(oversized, 0, { get: () => { throw new Error('CANARY_GLYPH_READ'); } });
+    const accepted = operatorLoader([OPS.showText], {}, [[exact]]);
+    const rejected = operatorLoader([OPS.showText], {}, [[oversized]]);
+    await expect(extractPdfStructure(new Uint8Array([1]), accepted.loader, undefined, OPS)).resolves.toBeDefined();
+    await expect(extractPdfStructure(new Uint8Array([1]), rejected.loader, undefined, OPS))
+      .rejects.toThrow('構造が大きすぎます');
+  });
+
+  it('accepts exactly 2M unicode characters and fails before a later width getter', async () => {
+    const first = operatorLoader([OPS.showText], {}, [[[{ unicode: 'a'.repeat(2_000_000), width: 0 }]]]);
+    await expect(extractPdfStructure(new Uint8Array([1]), first.loader, undefined, OPS)).resolves.toBeDefined();
+    const lateGlyph = { unicode: 'x', get width() { throw new Error('CANARY_LATE_WIDTH'); } };
+    const second = operatorLoader([OPS.showText, OPS.showText], {}, [
+      [[{ unicode: 'a'.repeat(2_000_000), width: 0 }]], [[lateGlyph]],
+    ]);
+    await expect(extractPdfStructure(new Uint8Array([1]), second.loader, undefined, OPS))
+      .rejects.toThrow('構造が大きすぎます');
+  });
+
+  it('aborts during glyph traversal and destroys once', async () => {
+    const controller = new AbortController();
+    const first = { get unicode() { controller.abort(); return 'a'; }, width: 500 };
+    const { loader, destroy } = operatorLoader([OPS.showText], {}, [[[first, { unicode: 'b', width: 500 }]]]);
+    await expect(extractPdfStructure(new Uint8Array([1]), loader, controller.signal, OPS))
+      .rejects.toHaveProperty('name', 'AbortError');
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('accepts only the serialized nested six-value text matrix without reading extras', async () => {
+    const matrix = new Float32Array([2, 0, 0, 3, 7, 11]);
+    const args = [matrix] as unknown[];
+    Object.defineProperty(args, 1, { get: () => { throw new Error('CANARY_MATRIX_EXTRA'); } });
+    const glyph = { unicode: 'x', width: 500 };
+    const valid = operatorLoader(
+      [OPS.setFont, OPS.setTextMatrix, OPS.showText], {},
+      [['CANARY_FONT', 10], args, [[glyph]]],
+    );
+    const [page] = await extractPdfStructure(new Uint8Array([1]), valid.loader, undefined, OPS);
+    expect(page.items).toEqual([{ text: 'x', x: 7, y: 11, width: 10, height: 30 }]);
+
+    const malformedValues = [
+      [1, 0, 0, 1, 7, 11],
+      [new Float32Array([1, 0, 0, 1, Number.NaN, 11])],
+    ];
+    for (const bad of malformedValues) {
+      const loaded = operatorLoader([OPS.setTextMatrix, OPS.showText], {}, [bad, [[glyph]]]);
+      const [malformedPage] = await extractPdfStructure(new Uint8Array([1]), loaded.loader, undefined, OPS);
+      expect(malformedPage.items[0]).toMatchObject({ x: 0, y: 0 });
+    }
+    const arrayLike = operatorLoader([OPS.setTextMatrix, OPS.showText], {}, [
+      [{ 0: 1, 1: 0, 2: 0, 3: 1, 4: 7, 5: 11, length: 6 }], [[glyph]],
+    ]);
+    const [arrayLikePage] = await extractPdfStructure(new Uint8Array([1]), arrayLike.loader, undefined, OPS);
+    expect(arrayLikePage.items[0]).toMatchObject({ x: 7, y: 11 });
+  });
+
+  it('normalizes each glyph before accounting and supports NFKC ligature classification', async () => {
+    const normalize = vi.fn((value: string) => value.normalize('NFKC'));
+    const dateGlyphs = [...'２０２６年①月②日'].map((unicode) => ({ unicode, width: 100 }));
+    const ligatureGlyphs = [{ unicode: 'ﬃ', width: 100 }];
+    const { loader } = operatorLoader([OPS.showText, OPS.showText], {}, [[dateGlyphs], [ligatureGlyphs]]);
+    const pages = await extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS, normalize);
+    expect(normalize).toHaveBeenCalledTimes(dateGlyphs.length + 1);
+    expect(pages[0].items.map((item) => item.text)).toEqual(['2026年1月2日', 'ffi']);
+    expect(buildSbiIncomeStructureSafeReport(pages).pages[0].items[0]).toMatchObject({ kind: 'date' });
+    expect(buildSbiIncomeStructureSafeReport(pages).pages[0].items[1]).toMatchObject({ kind: 'masked-text' });
+  });
+
+  it('fails closed and destroys once when normalization throws or expands beyond the budget', async () => {
+    for (const normalize of [
+      () => { throw new Error('CANARY_NORMALIZER'); },
+      () => 'x'.repeat(2_000_001),
+      () => 7 as unknown as string,
+    ]) {
+      const { loader, destroy } = operatorLoader([OPS.showText], {}, [[[ { unicode: 'a', width: 0 } ]]]);
+      await expect(extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS, normalize)).rejects.toThrow();
+      expect(destroy).toHaveBeenCalledOnce();
+    }
+  });
+
+  it('does not read a later showText operand after the exact item budget is consumed', async () => {
+    const fnArray = Array.from({ length: 20_001 }, () => OPS.showText);
+    const argsArray = Array.from({ length: 20_001 }, () => [[{ unicode: 'x', width: 0 }]]) as unknown[];
+    Object.defineProperty(argsArray, 20_000, { get: () => { throw new Error('CANARY_NO_ITEM_SLOT'); } });
+    const { loader } = operatorLoader(fnArray, {}, argsArray);
+    await expect(extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS))
+      .rejects.toThrow('構造が大きすぎます');
+  });
+
+  it('tracks CTM, text state, signed advance, and restores graphics state', async () => {
+    const glyph = (unicode: string, width: number, isSpace = false) => ({ unicode, width, isSpace });
+    const fnArray = [
+      OPS.transform, OPS.save, OPS.transform, OPS.beginText, OPS.setFont, OPS.setCharSpacing,
+      OPS.setWordSpacing, OPS.setHScale, OPS.setTextRise, OPS.setTextMatrix, OPS.showText,
+      OPS.restore, OPS.showText,
+    ];
+    const argsArray = [
+      [2, 0, 0, 3, 5, 7], [], [0, 1, -1, 0, 10, 20], [], ['CANARY_FONT', -10], [1],
+      [2], [50], [4], [new Float32Array([1, 0, 0, 1, 3, 6])],
+      [[glyph('a', 500), glyph(' ', -200, true), 100]], [], [[glyph('b', 500)]],
+    ];
+    const { loader } = operatorLoader(fnArray, {}, argsArray);
+    const [page] = await extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS);
+    expect(page.items).toEqual([
+      { text: 'a ', x: 5, y: 76, width: 9, height: 20 },
+      { text: 'b', x: 5, y: 7, width: 0, height: 0 },
+    ]);
+  });
+
+  it('exports finite nonnegative geometry while preserving signed local advances', async () => {
+    const { loader } = operatorLoader(
+      [OPS.setFont, OPS.setTextMatrix, OPS.showText, OPS.showText], {},
+      [['font', 10], [new Float32Array([1, 0, 0, 1, 9, 8])],
+        [[{ unicode: 'a', width: -500 }]], [[{ unicode: 'b', width: Number.POSITIVE_INFINITY }]]],
+    );
+    const [page] = await extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS);
+    expect(page.items).toEqual([
+      { text: 'a', x: 9, y: 8, width: 5, height: 10 },
+      { text: 'b', x: 4, y: 8, width: 0, height: 10 },
+    ]);
+  });
+
+  it('clamps negative transformed origins without clamping signed local advances', async () => {
+    const { loader } = operatorLoader(
+      [OPS.setFont, OPS.setTextMatrix, OPS.showText, OPS.showText], {},
+      [['font', 10], [new Float32Array([-1, 0, 0, 1, -2, -3])],
+        [[{ unicode: 'a', width: -500 }]], [[{ unicode: 'b', width: 0 }]]],
+    );
+    const [page] = await extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS);
+    expect(page.items).toEqual([
+      { text: 'a', x: 0, y: 0, width: 5, height: 10 },
+      { text: 'b', x: 3, y: 0, width: 0, height: 10 },
+    ]);
+  });
+
+  it('bounds save depth before reading excessive later state operands', async () => {
+    const fnArray = [...Array.from({ length: 101 }, () => OPS.save), OPS.transform];
+    const argsArray = Array.from({ length: fnArray.length }, () => []) as unknown[];
+    Object.defineProperty(argsArray, 101, { get: () => { throw new Error('CANARY_AFTER_STACK'); } });
+    const { loader } = operatorLoader(fnArray, {}, argsArray);
+    await expect(extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS))
+      .rejects.toThrow('構造が大きすぎます');
   });
 
   it('omits operator diagnostics when the API or complete mapping is unavailable', async () => {
