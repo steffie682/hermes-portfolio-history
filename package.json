@@ -19,7 +19,7 @@
     "@simplewebauthn/server": "13.3.2",
     "@vercel/blob": "2.6.1",
     "drizzle-orm": "1.0.0-rc.4",
-    "next": "16.3.0-canary.88",
+    "next": "16.3.0-canary.93",
     "pdfjs-dist": "6.1.200",
     "postgres": "3.4.9",
     "qrcode.react": "4.2.0",
@@ -34,7 +34,7 @@
     "@types/react-dom": "19.2.3",
     "drizzle-kit": "1.0.0-rc.4",
     "eslint": "9.39.5",
-    "eslint-config-next": "16.3.0-canary.88",
+    "eslint-config-next": "16.3.0-canary.93",
     "jsdom": "29.1.1",
     "typescript": "5.9.3",
     "vitest": "4.1.10"
