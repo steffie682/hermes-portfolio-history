@@ -12,6 +12,7 @@ export interface PdfStructurePage {
   height: number;
   rawItemCount?: number;
   discardedItemCount?: number;
+  extractionMode?: 'text-content' | 'xfa' | 'none';
   items: PdfStructureItem[];
 }
 
@@ -96,6 +97,7 @@ function buildSafeReport<TDocumentKind extends string>(
       width: rounded(page.width),
       height: rounded(page.height),
       ...pageDiagnostics[index],
+      ...(page.extractionMode ? { extractionMode: page.extractionMode } : {}),
       items: page.items.map((item): SafePdfStructureItem => ({
         ...classify(item.text, knownLabels),
         x: rounded(item.x),

@@ -1,7 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
 import { extractPdfStructure } from '@/import/sbi/pdf-structure-extractor';
+import { buildSbiIncomeStructureSafeReport } from '@/import/sbi/balance-report-safe-report';
 
 describe('PDF structure extractor', () => {
+  it('enables XFA parsing without enabling eval or DOM rendering', async () => {
+    const loader = vi.fn(() => ({
+      destroy: vi.fn().mockResolvedValue(undefined),
+      promise: Promise.resolve({ numPages: 1, getPage: vi.fn().mockResolvedValue({
+        getViewport: () => ({ width: 600, height: 320 }),
+        getTextContent: vi.fn().mockResolvedValue({ items: [] }),
+        getXfa: vi.fn().mockResolvedValue(null),
+      }) }),
+    }));
+
+    await extractPdfStructure(new Uint8Array([1, 2, 3]), loader);
+
+    expect(loader).toHaveBeenCalledWith(expect.objectContaining({
+      enableXfa: true,
+      isEvalSupported: false,
+    }));
+  });
+
   it('fails immediately without loading when already aborted', async () => {
     const controller = new AbortController();
     controller.abort();
@@ -67,6 +86,7 @@ describe('PDF structure extractor', () => {
       pageNumber: 1,
       width: 595,
       height: 842,
+      extractionMode: 'text-content',
       rawItemCount: 2,
       discardedItemCount: 1,
       items: [{ text: '信用取引', x: 101, y: 702, width: 80, height: 12 }],
@@ -94,10 +114,204 @@ describe('PDF structure extractor', () => {
     const pages = await extractPdfStructure(new Uint8Array([1, 2, 3]), loader);
 
     expect(pages).toEqual([
-      { pageNumber: 1, width: 600, height: 320, rawItemCount: 0, discardedItemCount: 0, items: [] },
-      { pageNumber: 2, width: 600, height: 320, rawItemCount: 2, discardedItemCount: 2, items: [] },
+      { pageNumber: 1, width: 600, height: 320, extractionMode: 'none', rawItemCount: 0, discardedItemCount: 0, items: [] },
+      { pageNumber: 2, width: 600, height: 320, extractionMode: 'text-content', rawItemCount: 2, discardedItemCount: 2, items: [] },
     ]);
     expect(JSON.stringify(pages)).not.toContain('CANARY_REJECTED');
+  });
+
+  it('falls back from PDF.js XFA text items without geometry to the XFA tree', async () => {
+    const getXfa = vi.fn().mockResolvedValue({
+      attributes: { textContent: '収益分配金', style: { left: '12px', top: '21px' } },
+    });
+    const loader = vi.fn(() => ({ destroy: vi.fn().mockResolvedValue(undefined), promise: Promise.resolve({
+      numPages: 1,
+      getPage: vi.fn().mockResolvedValue({
+        getViewport: () => ({ width: 600, height: 320 }),
+        getTextContent: vi.fn().mockResolvedValue({ items: [{ str: '収益分配金' }] }),
+        getXfa,
+      }),
+    }) }));
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader)).resolves.toEqual([{
+      pageNumber: 1, width: 600, height: 320, extractionMode: 'xfa',
+      rawItemCount: 1, discardedItemCount: 0,
+      items: [{ text: '収益分配金', x: 12, y: 21, width: 0, height: 0 }],
+    }]);
+    expect(getXfa).toHaveBeenCalledOnce();
+  });
+
+  it('extracts only XFA textContent/value and approved geometry into the privacy-safe report flow', async () => {
+    const xfa = {
+      value: 'CANARY_SHADOWED_VALUE',
+      attributes: {
+        textContent: '収益分配金',
+        style: { left: '12.5px', top: '21mm', width: '81pt', height: '9.5px', color: 'CANARY_STYLE' },
+        id: 'CANARY_ID', href: 'https://CANARY_URL.invalid', name: 'CANARY_NAME_ATTRIBUTE',
+      },
+      children: [
+        {
+          value: 'CANARY_CHILD_SHADOWED_VALUE',
+          attributes: { textContent: 'PRIVATE_NAME_CANARY', style: { left: '101px', top: '42px' } },
+        },
+        { value: '2026/07/22', attributes: { style: { width: 'not-a-number', height: Infinity } } },
+        {
+          value: '12,345円',
+          attributes: { textContent: 12345, source: 'CANARY_SOURCE_ATTRIBUTE' },
+          metadata: 'CANARY_METADATA',
+          rejected: 'CANARY_REJECTED',
+        },
+      ],
+    };
+    const loader = vi.fn(() => ({ destroy: vi.fn().mockResolvedValue(undefined), promise: Promise.resolve({
+      numPages: 1,
+      getPage: vi.fn().mockResolvedValue({
+        isPureXfa: true,
+        getViewport: () => ({ width: 600, height: 320 }),
+        getTextContent: vi.fn().mockResolvedValue({ items: [] }),
+        getXfa: vi.fn().mockResolvedValue(xfa),
+      }),
+    }) }));
+
+    const pages = await extractPdfStructure(new Uint8Array([1, 2, 3]), loader);
+    const safeJson = JSON.stringify(buildSbiIncomeStructureSafeReport(pages));
+
+    expect(pages[0]).toMatchObject({ extractionMode: 'xfa', rawItemCount: 4, discardedItemCount: 0 });
+    expect(JSON.parse(safeJson).pages[0]).toMatchObject({
+      extractionMode: 'xfa',
+      items: [
+        { kind: 'known-label', labels: ['収益分配金'], x: 10, y: 20, width: 80, height: 10 },
+        { kind: 'masked-text', x: 100, y: 40, width: 0, height: 0 },
+        { kind: 'date', x: 0, y: 0, width: 0, height: 0 },
+        { kind: 'number', x: 0, y: 0, width: 0, height: 0 },
+      ],
+    });
+    expect(safeJson).not.toMatch(/PRIVATE_NAME_CANARY|2026\/07\/22|12,345|CANARY|https:/);
+  });
+
+  it('stops fail-closed during XFA item overflow before reading later nodes', async () => {
+    const unreadNode = Object.defineProperty({}, 'value', {
+      get: () => { throw new Error('CANARY_LATE_NODE_WAS_READ'); },
+    });
+    const xfa = {
+      children: [
+        ...Array.from({ length: 20_001 }, () => ({ value: '口' })),
+        unreadNode,
+      ],
+    };
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const loader = vi.fn(() => ({ destroy, promise: Promise.resolve({ numPages: 1, getPage: vi.fn().mockResolvedValue({
+      getViewport: () => ({ width: 600, height: 320 }),
+      getTextContent: () => Promise.resolve({ items: [{ str: '口' }] }),
+      getXfa: () => Promise.resolve(xfa),
+    }) }) }));
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader))
+      .rejects.toThrow('構造が大きすぎます');
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('preserves bounded zero diagnostics when XFA is null', async () => {
+    const getXfa = vi.fn().mockResolvedValue(null);
+    const loader = vi.fn(() => ({ destroy: vi.fn().mockResolvedValue(undefined), promise: Promise.resolve({
+      numPages: 1,
+      getPage: vi.fn().mockResolvedValue({
+        getViewport: () => ({ width: 600, height: 320 }),
+        getTextContent: vi.fn().mockResolvedValue({ items: [] }),
+        getXfa,
+      }),
+    }) }));
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader)).resolves.toEqual([{
+      pageNumber: 1, width: 600, height: 320, extractionMode: 'none',
+      rawItemCount: 0, discardedItemCount: 0, items: [],
+    }]);
+    expect(getXfa).toHaveBeenCalledOnce();
+  });
+
+  it('skips cyclic XFA references safely', async () => {
+    const xfa: { value: string; children: unknown[] } = { value: '口数', children: [] };
+    xfa.children.push(xfa);
+    const loader = vi.fn(() => ({ destroy: vi.fn().mockResolvedValue(undefined), promise: Promise.resolve({
+      numPages: 1,
+      getPage: vi.fn().mockResolvedValue({
+        getViewport: () => ({ width: 600, height: 320 }), getTextContent: () => Promise.resolve({ items: [] }),
+        getXfa: () => Promise.resolve(xfa),
+      }),
+    }) }));
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader)).resolves.toEqual([expect.objectContaining({
+      extractionMode: 'xfa', rawItemCount: 1, discardedItemCount: 0,
+    })]);
+  });
+
+  it('fails closed when XFA depth exceeds its bound', async () => {
+    let xfa: Record<string, unknown> = { value: '口数' };
+    for (let index = 0; index < 200; index += 1) xfa = { children: [xfa] };
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const loader = vi.fn(() => ({ destroy, promise: Promise.resolve({ numPages: 1, getPage: vi.fn().mockResolvedValue({
+      getViewport: () => ({ width: 600, height: 320 }), getTextContent: () => Promise.resolve({ items: [] }),
+      getXfa: () => Promise.resolve(xfa),
+    }) }) }));
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader))
+      .rejects.toThrow('SBI取引残高報告書PDFの構造が大きすぎます');
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['node count', { children: Array.from({ length: 50_001 }, () => ({})) }],
+    ['item count', { children: Array.from({ length: 20_001 }, () => ({ value: '口' })) }],
+    ['text characters', { value: 'a'.repeat(2_000_001) }],
+  ])('fails closed when XFA exceeds the %s bound', async (_bound, xfa) => {
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const loader = vi.fn(() => ({ destroy, promise: Promise.resolve({ numPages: 1, getPage: vi.fn().mockResolvedValue({
+      getViewport: () => ({ width: 600, height: 320 }), getTextContent: () => Promise.resolve({ items: [] }),
+      getXfa: () => Promise.resolve(xfa),
+    }) }) }));
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader))
+      .rejects.toThrow('SBI取引残高報告書PDFの構造が大きすぎます');
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when aggregate XFA nodes across pages exceed the document bound', async () => {
+    const xfaPages = Array.from({ length: 2 }, () => ({
+      children: Array.from({ length: 25_000 }, () => ({})),
+    }));
+    xfaPages[1].children[24_998] = Object.defineProperty({}, 'value', {
+      get: () => { throw new Error('CANARY_OVER_BUDGET_NODE_WAS_READ'); },
+    });
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const getPage = vi.fn().mockImplementation(async (pageNumber: number) => ({
+      getViewport: () => ({ width: 600, height: 320 }),
+      getTextContent: () => Promise.resolve({ items: [] }),
+      getXfa: () => Promise.resolve(xfaPages[pageNumber - 1]),
+    }));
+    const loader = vi.fn(() => ({
+      destroy,
+      promise: Promise.resolve({ numPages: 2, getPage }),
+    }));
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader))
+      .rejects.toThrow('SBI取引残高報告書PDFの構造が大きすぎます');
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('destroys once and rejects promptly when aborted during getXfa', async () => {
+    const controller = new AbortController();
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const getXfa = vi.fn(() => new Promise<never>(() => undefined));
+    const loader = vi.fn(() => ({ destroy, promise: Promise.resolve({ numPages: 1, getPage: vi.fn().mockResolvedValue({
+      getViewport: () => ({ width: 600, height: 320 }), getTextContent: () => Promise.resolve({ items: [] }), getXfa,
+    }) }) }));
+    const extraction = extractPdfStructure(new Uint8Array([1]), loader, controller.signal);
+
+    await vi.waitFor(() => expect(getXfa).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(extraction).rejects.toHaveProperty('name', 'AbortError');
+    expect(destroy).toHaveBeenCalledOnce();
   });
 
   it.each([Number.NaN, 1.5])(
