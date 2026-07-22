@@ -13,6 +13,10 @@ export interface PdfStructurePage {
   rawItemCount?: number;
   discardedItemCount?: number;
   extractionMode?: 'text-content' | 'xfa' | 'annotations' | 'none';
+  textPaintOperatorCount?: number;
+  imagePaintOperatorCount?: number;
+  pathOperatorCount?: number;
+  totalOperatorCount?: number;
   items: PdfStructureItem[];
 }
 
@@ -38,6 +42,7 @@ const INCOME_STRUCTURE_LABELS = [
 ] as const;
 const MAX_PAGES = 100;
 const MAX_ITEMS = 20_000;
+const MAX_OPERATORS = 200_000;
 
 function rounded(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -82,10 +87,37 @@ function buildSafeReport<TDocumentKind extends string>(
       && discardedItemCount <= MAX_ITEMS
       && rawItemCount === page.items.length + discardedItemCount;
     if (!valid) throw new Error('SBI取引残高報告書PDFの構造が大きすぎます');
-    return { rawItemCount, discardedItemCount };
+    const operatorValues = [
+      page.textPaintOperatorCount,
+      page.imagePaintOperatorCount,
+      page.pathOperatorCount,
+      page.totalOperatorCount,
+    ];
+    const hasOperatorDiagnostics = operatorValues.some((value) => value !== undefined);
+    if (hasOperatorDiagnostics && (!operatorValues.every((value) => Number.isInteger(value)
+      && (value as number) >= 0 && (value as number) <= MAX_OPERATORS)
+      || (page.textPaintOperatorCount as number) + (page.imagePaintOperatorCount as number)
+        + (page.pathOperatorCount as number) > (page.totalOperatorCount as number))) {
+      throw new Error('SBI取引残高報告書PDFの構造が大きすぎます');
+    }
+    return {
+      rawItemCount,
+      discardedItemCount,
+      ...(hasOperatorDiagnostics ? {
+        textPaintOperatorCount: page.textPaintOperatorCount as number,
+        imagePaintOperatorCount: page.imagePaintOperatorCount as number,
+        pathOperatorCount: page.pathOperatorCount as number,
+        totalOperatorCount: page.totalOperatorCount as number,
+      } : {}),
+    };
   });
   const rawItemCount = pageDiagnostics.reduce((total, page) => total + page.rawItemCount, 0);
-  if (pages.length > MAX_PAGES || itemCount > MAX_ITEMS || rawItemCount > MAX_ITEMS) {
+  const totalOperatorCount = pageDiagnostics.reduce(
+    (total, page) => total + ('totalOperatorCount' in page ? (page.totalOperatorCount ?? 0) : 0),
+    0,
+  );
+  if (pages.length > MAX_PAGES || itemCount > MAX_ITEMS || rawItemCount > MAX_ITEMS
+    || totalOperatorCount > MAX_OPERATORS) {
     throw new Error('SBI取引残高報告書PDFの構造が大きすぎます');
   }
   return {

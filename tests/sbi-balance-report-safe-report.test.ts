@@ -2,6 +2,27 @@ import { describe, expect, it } from 'vitest';
 import { buildSbiBalanceReportSafeReport } from '@/import/sbi/balance-report-safe-report';
 
 describe('SBI balance report safe structure', () => {
+  it('keeps only validated numeric operator diagnostics', () => {
+    const report = buildSbiBalanceReportSafeReport([{
+      pageNumber: 1, width: 600, height: 320, extractionMode: 'none', items: [],
+      textPaintOperatorCount: 4, imagePaintOperatorCount: 8, pathOperatorCount: 2,
+      totalOperatorCount: 16,
+    }]);
+
+    expect(report.pages[0]).toMatchObject({
+      textPaintOperatorCount: 4, imagePaintOperatorCount: 8,
+      pathOperatorCount: 2, totalOperatorCount: 16,
+    });
+    expect(JSON.stringify(report)).not.toContain('undefined');
+  });
+
+  it.each([NaN, -1, 1.5, 200_001])('rejects an invalid operator diagnostic %s', (invalid) => {
+    expect(() => buildSbiBalanceReportSafeReport([{
+      pageNumber: 1, width: 600, height: 320, items: [],
+      textPaintOperatorCount: invalid, imagePaintOperatorCount: 0,
+      pathOperatorCount: 0, totalOperatorCount: 0,
+    }])).toThrow('構造が大きすぎます');
+  });
   it('keeps known labels and layout types without retaining source text or values', () => {
     const report = buildSbiBalanceReportSafeReport([{
       pageNumber: 1,

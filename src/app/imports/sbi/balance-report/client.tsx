@@ -13,7 +13,12 @@ async function inspectPdfInBrowser(source: Uint8Array, signal: AbortSignal): Pro
     'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
     import.meta.url,
   ).toString();
-  const pages = await extractPdfStructure(source, pdfjs.getDocument as unknown as PdfDocumentLoader, signal);
+  const pages = await extractPdfStructure(
+    source,
+    pdfjs.getDocument as unknown as PdfDocumentLoader,
+    signal,
+    pdfjs.OPS,
+  );
   return buildSbiBalanceReportSafeReport(pages);
 }
 

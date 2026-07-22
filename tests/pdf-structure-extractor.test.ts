@@ -2,7 +2,152 @@ import { describe, expect, it, vi } from 'vitest';
 import { extractPdfStructure } from '@/import/sbi/pdf-structure-extractor';
 import { buildSbiIncomeStructureSafeReport } from '@/import/sbi/balance-report-safe-report';
 
+const OPS = {
+  showText: 44,
+  showSpacedText: 45,
+  nextLineShowText: 46,
+  nextLineSetSpacingShowText: 47,
+  paintImageMaskXObject: 83,
+  paintImageMaskXObjectGroup: 84,
+  paintImageXObject: 85,
+  paintInlineImageXObject: 86,
+  paintInlineImageXObjectGroup: 87,
+  paintImageXObjectRepeat: 88,
+  paintImageMaskXObjectRepeat: 89,
+  paintSolidColorImageMask: 90,
+  constructPath: 91,
+};
+
 describe('PDF structure extractor', () => {
+  function operatorLoader(fnArray: unknown[], overrides: Record<string, unknown> = {}) {
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const getOperatorList = vi.fn().mockResolvedValue({ fnArray });
+    const loader = vi.fn(() => ({ destroy, promise: Promise.resolve({
+      numPages: 1,
+      getPage: vi.fn().mockResolvedValue({
+        getViewport: () => ({ width: 600, height: 320 }),
+        getTextContent: vi.fn().mockResolvedValue({ items: [] }),
+        getXfa: vi.fn().mockResolvedValue(null),
+        getAnnotations: vi.fn().mockResolvedValue([]),
+        getOperatorList,
+        ...overrides,
+      }),
+    }) }));
+    return { destroy, getOperatorList, loader };
+  }
+
+  it('counts only mixed text, image, and path paint operators without reading operands', async () => {
+    const getArgsArray = vi.fn(() => { throw new Error('CANARY_ARGS_ARRAY_WAS_READ'); });
+    const operatorList = {
+      fnArray: [
+        OPS.showText, OPS.showSpacedText, OPS.nextLineShowText, OPS.nextLineSetSpacingShowText,
+        OPS.paintImageMaskXObject, OPS.paintImageMaskXObjectGroup, OPS.paintImageXObject,
+        OPS.paintInlineImageXObject, OPS.paintInlineImageXObjectGroup, OPS.paintImageXObjectRepeat,
+        OPS.paintImageMaskXObjectRepeat, OPS.paintSolidColorImageMask,
+        OPS.constructPath, OPS.constructPath, 999,
+      ],
+      get argsArray() { return getArgsArray(); },
+    };
+    const { loader } = operatorLoader([], {
+      getOperatorList: vi.fn().mockResolvedValue(operatorList),
+    });
+
+    const pages = await extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS);
+    const safeJson = JSON.stringify(buildSbiIncomeStructureSafeReport(pages));
+
+    expect(pages).toEqual([expect.objectContaining({
+      extractionMode: 'none', textPaintOperatorCount: 4, imagePaintOperatorCount: 8,
+      pathOperatorCount: 2, totalOperatorCount: 15,
+    })]);
+    expect(JSON.parse(safeJson).pages[0]).toMatchObject({
+      textPaintOperatorCount: 4, imagePaintOperatorCount: 8, pathOperatorCount: 2, totalOperatorCount: 15,
+    });
+    expect(getArgsArray).not.toHaveBeenCalled();
+    expect(safeJson).not.toContain('CANARY');
+  });
+
+  it('omits operator diagnostics when the API or complete mapping is unavailable', async () => {
+    const withoutApi = operatorLoader([], { getOperatorList: undefined });
+    const incompleteMapping = operatorLoader([OPS.showText]);
+
+    const [pageWithoutApi] = await extractPdfStructure(new Uint8Array([1]), withoutApi.loader, undefined, OPS);
+    const [pageWithoutMapping] = await extractPdfStructure(
+      new Uint8Array([1]), incompleteMapping.loader, undefined, { showText: OPS.showText },
+    );
+
+    expect(pageWithoutApi).not.toHaveProperty('totalOperatorCount');
+    expect(pageWithoutMapping).not.toHaveProperty('totalOperatorCount');
+    expect(incompleteMapping.getOperatorList).not.toHaveBeenCalled();
+  });
+
+  it('does not request operators when accepted text already exists', async () => {
+    const getOperatorList = vi.fn().mockResolvedValue({ fnArray: [OPS.showText] });
+    const { loader } = operatorLoader([], {
+      getTextContent: vi.fn().mockResolvedValue({ items: [{
+        str: '信用取引', transform: [1, 0, 0, 1, 10, 20], width: 30, height: 10,
+      }] }),
+      getOperatorList,
+    });
+
+    const [page] = await extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS);
+
+    expect(page.extractionMode).toBe('text-content');
+    expect(getOperatorList).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on a malformed operator list', async () => {
+    const { loader, destroy } = operatorLoader([], {
+      getOperatorList: vi.fn().mockResolvedValue({ fnArray: 'CANARY_NOT_AN_ARRAY' }),
+    });
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS))
+      .rejects.toThrow('構造が大きすぎます');
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('fails before reading an element of an oversized single operator list', async () => {
+    const fnArray = Array.from({ length: 200_001 }, () => 999);
+    Object.defineProperty(fnArray, 0, {
+      get: () => { throw new Error('CANARY_OVERSIZED_OPERATOR_WAS_READ'); },
+    });
+    const { loader } = operatorLoader(fnArray);
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS))
+      .rejects.toThrow('構造が大きすぎます');
+  });
+
+  it('fails before reading a later list that exceeds the aggregate operator budget', async () => {
+    const first = Array.from({ length: 100_001 }, () => 999);
+    const second = Array.from({ length: 100_000 }, () => 999);
+    Object.defineProperty(second, 0, {
+      get: () => { throw new Error('CANARY_AGGREGATE_OPERATOR_WAS_READ'); },
+    });
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const getPage = vi.fn().mockImplementation(async (pageNumber: number) => ({
+      getViewport: () => ({ width: 600, height: 320 }),
+      getTextContent: () => Promise.resolve({ items: [] }),
+      getXfa: () => Promise.resolve(null),
+      getAnnotations: () => Promise.resolve([]),
+      getOperatorList: () => Promise.resolve({ fnArray: pageNumber === 1 ? first : second }),
+    }));
+    const loader = vi.fn(() => ({ destroy, promise: Promise.resolve({ numPages: 2, getPage }) }));
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS))
+      .rejects.toThrow('構造が大きすぎます');
+  });
+
+  it('destroys once and rejects promptly when aborted during getOperatorList', async () => {
+    const controller = new AbortController();
+    const getOperatorList = vi.fn(() => new Promise<never>(() => undefined));
+    const { destroy, loader } = operatorLoader([], { getOperatorList });
+    const extraction = extractPdfStructure(new Uint8Array([1]), loader, controller.signal, OPS);
+
+    await vi.waitFor(() => expect(getOperatorList).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(extraction).rejects.toHaveProperty('name', 'AbortError');
+    expect(destroy).toHaveBeenCalledOnce();
+  });
   function annotationLoader(annotations: unknown[], overrides: Record<string, unknown> = {}) {
     const destroy = vi.fn().mockResolvedValue(undefined);
     const getAnnotations = vi.fn().mockResolvedValue(annotations);

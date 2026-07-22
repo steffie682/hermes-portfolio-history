@@ -11,6 +11,7 @@ interface PdfPageLike {
   getTextContent(): Promise<{ items: unknown[] }>;
   getXfa?(): Promise<unknown | null>;
   getAnnotations?(input: { intent: 'display' }): Promise<unknown[]>;
+  getOperatorList?(): Promise<{ fnArray: unknown[] }>;
   isPureXfa?: boolean;
 }
 interface PdfDocumentLike {
@@ -23,13 +24,74 @@ interface PdfLoadingTaskLike {
 }
 export type PdfDocumentLoader = (options: Record<string, unknown>) => PdfLoadingTaskLike;
 
+const TEXT_PAINT_OPERATOR_NAMES = [
+  'showText', 'showSpacedText', 'nextLineShowText', 'nextLineSetSpacingShowText',
+] as const;
+const IMAGE_PAINT_OPERATOR_NAMES = [
+  'paintImageMaskXObject', 'paintImageMaskXObjectGroup', 'paintImageXObject',
+  'paintInlineImageXObject', 'paintInlineImageXObjectGroup', 'paintImageXObjectRepeat',
+  'paintImageMaskXObjectRepeat', 'paintSolidColorImageMask',
+] as const;
+const PATH_OPERATOR_NAMES = ['constructPath'] as const;
+type PdfPaintOperatorName = typeof TEXT_PAINT_OPERATOR_NAMES[number]
+  | typeof IMAGE_PAINT_OPERATOR_NAMES[number]
+  | typeof PATH_OPERATOR_NAMES[number];
+export type PdfOperatorCodeMapping = Partial<Record<PdfPaintOperatorName, unknown>>;
+
 const MAX_PAGES = 100;
 const MAX_ITEMS = 20_000;
 const MAX_TEXT_CHARACTERS = 2_000_000;
 const MAX_XFA_NODES = 50_000;
 const MAX_XFA_DEPTH = 100;
 const MAX_ANNOTATIONS = 20_000;
+const MAX_OPERATORS = 200_000;
 const STRUCTURE_TOO_LARGE_ERROR = 'SBI取引残高報告書PDFの構造が大きすぎます';
+
+interface OperatorCodeSets {
+  text: Set<number>;
+  image: Set<number>;
+  path: Set<number>;
+}
+
+function operatorCodeSets(mapping: PdfOperatorCodeMapping | undefined): OperatorCodeSets | null {
+  if (!mapping || typeof mapping !== 'object') return null;
+  const codes = new Map<PdfPaintOperatorName, number>();
+  for (const name of [
+    ...TEXT_PAINT_OPERATOR_NAMES, ...IMAGE_PAINT_OPERATOR_NAMES, ...PATH_OPERATOR_NAMES,
+  ]) {
+    const code = mapping[name];
+    if (!Number.isInteger(code) || (code as number) < 0 || (code as number) > MAX_OPERATORS) return null;
+    codes.set(name, code as number);
+  }
+  if (new Set(codes.values()).size !== codes.size) return null;
+  return {
+    text: new Set(TEXT_PAINT_OPERATOR_NAMES.map((name) => codes.get(name)!)),
+    image: new Set(IMAGE_PAINT_OPERATOR_NAMES.map((name) => codes.get(name)!)),
+    path: new Set(PATH_OPERATOR_NAMES.map((name) => codes.get(name)!)),
+  };
+}
+
+function countPaintOperators(fnArray: unknown[], codes: OperatorCodeSets, remaining: number) {
+  if (!Array.isArray(fnArray)) throw new Error(STRUCTURE_TOO_LARGE_ERROR);
+  const totalOperatorCount = fnArray.length;
+  if (totalOperatorCount > remaining) throw new Error(STRUCTURE_TOO_LARGE_ERROR);
+  let textPaintOperatorCount = 0;
+  let imagePaintOperatorCount = 0;
+  let pathOperatorCount = 0;
+  for (let index = 0; index < totalOperatorCount; index += 1) {
+    const code = fnArray[index];
+    if (!Number.isInteger(code) || (code as number) < 0 || (code as number) > MAX_OPERATORS) continue;
+    if (codes.text.has(code as number)) textPaintOperatorCount += 1;
+    else if (codes.image.has(code as number)) imagePaintOperatorCount += 1;
+    else if (codes.path.has(code as number)) pathOperatorCount += 1;
+  }
+  return {
+    textPaintOperatorCount,
+    imagePaintOperatorCount,
+    pathOperatorCount,
+    totalOperatorCount,
+  };
+}
 
 function isTextItem(item: unknown): item is PdfTextItemLike {
   if (!item || typeof item !== 'object') return false;
@@ -185,6 +247,7 @@ export async function extractPdfStructure(
   source: Uint8Array,
   loadDocument: PdfDocumentLoader,
   signal?: AbortSignal,
+  operatorCodes?: PdfOperatorCodeMapping,
 ): Promise<PdfStructurePage[]> {
   signal?.throwIfAborted();
   let loadingTask: PdfLoadingTaskLike | null = null;
@@ -222,6 +285,8 @@ export async function extractPdfStructure(
     let textCharacterCount = 0;
     let xfaNodeCount = 0;
     let annotationCount = 0;
+    let operatorCount = 0;
+    const paintOperatorCodes = operatorCodeSets(operatorCodes);
     for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
       signal?.throwIfAborted();
       const pagePromise = document.getPage(pageNumber);
@@ -297,6 +362,21 @@ export async function extractPdfStructure(
           }
         }
       }
+      let operatorDiagnostics: ReturnType<typeof countPaintOperators> | undefined;
+      if (items.length === 0 && page.getOperatorList && paintOperatorCodes) {
+        const operatorListPromise = page.getOperatorList();
+        const operatorList = await (signal ? Promise.race([operatorListPromise, aborted]) : operatorListPromise);
+        signal?.throwIfAborted();
+        if (!operatorList || typeof operatorList !== 'object' || !Array.isArray(operatorList.fnArray)) {
+          throw new Error(STRUCTURE_TOO_LARGE_ERROR);
+        }
+        operatorDiagnostics = countPaintOperators(
+          operatorList.fnArray,
+          paintOperatorCodes,
+          MAX_OPERATORS - operatorCount,
+        );
+        operatorCount += operatorDiagnostics.totalOperatorCount;
+      }
       if (extractionMode !== 'xfa' && extractionMode !== 'annotations') {
         itemCount += content.items.length;
         if (itemCount > MAX_ITEMS) throw new Error(STRUCTURE_TOO_LARGE_ERROR);
@@ -308,6 +388,7 @@ export async function extractPdfStructure(
         extractionMode,
         rawItemCount: extractionMode === 'xfa' || extractionMode === 'annotations' ? items.length : content.items.length,
         discardedItemCount: extractionMode === 'xfa' || extractionMode === 'annotations' ? 0 : content.items.length - items.length,
+        ...operatorDiagnostics,
         items,
       });
     }
