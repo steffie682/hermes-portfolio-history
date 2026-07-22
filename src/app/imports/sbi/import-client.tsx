@@ -248,6 +248,9 @@ export default function SbiImportClient({ initialAccounts }: { initialAccounts: 
           ) : preview.hasDeferredRows ? (
             <div className="import-warning" role="alert"><strong>未反映の取引が {preview.deferredRows}件あります</strong><p>対応が完成するまで、総資産を確定表示しません。</p></div>
           ) : <p className="import-ready-message">すべて自動計上候補として確認できました。</p>}
+          {reinvestmentAssessment?.requiresDistributionDetails ? (
+            <Link className="balance-report-link" href="/imports/sbi/distribution-report">分配金・再投資PDFの構造を確認する</Link>
+          ) : null}
           {preview.supportCounts['needs-margin-ledger'] > 0 ? <Link className="balance-report-link" href="/imports/sbi/balance-report">取引残高報告書を確認する</Link> : null}
           <button
             className="import-confirm"

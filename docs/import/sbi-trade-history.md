@@ -91,7 +91,7 @@ fixtureには氏名、口座番号、実銘柄、実金額を含めない。
 - PDFは20 MiB以下に制限し、`arrayBuffer()`前に`file.size`を確認する。
 - `%PDF-` magicを確認する。
 - PDF.jsは同一origin workerだけを使い、JavaScript評価を無効化する。
-- `/imports/sbi/:path*` は `connect-src 'none'` とし、外部送信を禁止する。
+- import画面のCSPとno-storeヘッダーを適用する。
 - PDF textは処理中のbrowser memoryだけで使い、React state、storage、server、consoleへ保存しない。
 - stateと保存可能なsafe reportには、既知の見出し、値の型、10pt単位へ丸めた配置、page数だけを保持する。
 - 氏名、口座番号、銘柄、銘柄コード、日付値、数量、単価、金額、元filename、hashはsafe reportへ含めない。
@@ -115,3 +115,9 @@ fixtureには氏名、口座番号、実銘柄、実金額を含めない。
 `分配金再投資` 行の正の約定数量は投信口数の増加event候補として扱える。約定単価は価格基準が未確認なので `sourceQuotedUnitPrice` と `basis: unverified` で保持する。取引名はexact matchし、数量・単価が0以下なら `needs-review` とする。
 
 一方、約定履歴14列だけでは一般分配金と元本払戻金（特別分配金）の内訳、税引前後、取得価額への反映を確定しない。段階eventは `cashTreatment`、`taxTreatment`、`costBasisTreatment` をすべて `unresolved` とし、CSVの税額・受渡金額を分配会計へ推測適用しない。画面stateには候補件数・口数準備可能件数・要確認件数・分配詳細必要flagだけを保持する。
+
+### 分配金・再投資PDFの構造インスペクター
+
+`/imports/sbi/distribution-report` は認証済み利用者専用で、PDFを送信・保存せずブラウザ内だけで構造を調べる。20 MiB上限と`%PDF-` magicを検査し、PDF.jsの同一origin workerを使う。このルートには`connect-src 'none'`と`private, no-store`を適用する。
+
+保存・共有できるのは、許可された会計ラベル、日付・数値・句読点・マスク文字の種別、10pt単位に丸めたpage/item配置、page数だけを含むsafe JSONである。元PDF、filename、hash、元テキスト、日付値、識別子、数量・金額は含めない。現時点では実際の分配金、税、取得価額、再投資口数の値を解釈せず、DBやstorageへ保存しない。

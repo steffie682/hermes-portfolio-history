@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { buildSbiBalanceReportSafeReport } from '@/import/sbi/balance-report-safe-report';
+import { buildSbiIncomeStructureSafeReport } from '@/import/sbi/balance-report-safe-report';
 import { extractPdfStructure, type PdfDocumentLoader } from '@/import/sbi/pdf-structure-extractor';
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
-type SafeReport = ReturnType<typeof buildSbiBalanceReportSafeReport>;
+type SafeReport = ReturnType<typeof buildSbiIncomeStructureSafeReport>;
 
 async function inspectPdfInBrowser(source: Uint8Array, signal: AbortSignal): Promise<SafeReport> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
@@ -14,7 +14,7 @@ async function inspectPdfInBrowser(source: Uint8Array, signal: AbortSignal): Pro
     import.meta.url,
   ).toString();
   const pages = await extractPdfStructure(source, pdfjs.getDocument as unknown as PdfDocumentLoader, signal);
-  return buildSbiBalanceReportSafeReport(pages);
+  return buildSbiIncomeStructureSafeReport(pages);
 }
 
 function hasPdfMagic(source: Uint8Array): boolean {
@@ -26,7 +26,7 @@ function hasPdfMagic(source: Uint8Array): boolean {
     && source[4] === 0x2d;
 }
 
-export default function SbiBalanceReportClient({
+export default function SbiDistributionReportClient({
   inspectPdf = inspectPdfInBrowser,
 }: {
   inspectPdf?: (source: Uint8Array, signal: AbortSignal) => Promise<SafeReport>;
@@ -71,7 +71,7 @@ export default function SbiBalanceReportClient({
       if (version !== operationVersion.current) return;
       setReport(null);
       setStatus('');
-      setError('PDFを確認できませんでした。SBIの取引残高報告書PDFを選び直してください。');
+      setError('PDFを確認できませんでした。SBIの分配金・再投資PDFを選び直してください。');
     } finally {
       if (version === operationVersion.current) activeInspection.current = null;
     }
@@ -80,38 +80,33 @@ export default function SbiBalanceReportClient({
   const labels = report
     ? [...new Set(report.pages.flatMap((page) => page.items.flatMap((item) => item.labels ?? [])))]
     : [];
-  const reportJson = report ? JSON.stringify(report, null, 2) : '';
   const reportHref = report
-    ? `data:application/json;charset=utf-8,${encodeURIComponent(reportJson)}`
+    ? `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(report, null, 2))}`
     : '';
 
   return (
     <>
       <div className="import-file-panel">
-        <label htmlFor="sbi-balance-report-pdf">SBI取引残高報告書PDF</label>
-        <input id="sbi-balance-report-pdf" type="file" accept=".pdf,application/pdf" onChange={handleFileChange} />
-        <strong>PDFは外部へ送信されません</strong>
-        <p>このbrowser内で見出しと表の配置だけを確認し、氏名・口座番号・銘柄・金額はレポートへ残しません。</p>
+        <label htmlFor="sbi-distribution-report-pdf">SBI分配金・再投資PDF</label>
+        <input id="sbi-distribution-report-pdf" type="file" accept=".pdf,application/pdf" onChange={handleFileChange} />
+        <strong>PDFは送信されません</strong>
+        <p>このブラウザ内で、許可された会計ラベルと配置、文字種別だけを安全なJSONにします。</p>
       </div>
       {status ? <p className="import-live-status" role="status">{status}</p> : null}
       {error ? <div className="import-error" role="alert">{error}</div> : null}
       {report ? (
-        <section className="safe-report-result" aria-labelledby="safe-report-title">
-          <h2 id="safe-report-title">安全な構造レポート</h2>
-          <p>検出できた既知の見出し</p>
+        <section className="safe-report-result" aria-labelledby="distribution-safe-report-title">
+          <h2 id="distribution-safe-report-title">安全な構造レポート</h2>
+          <p>検出できた許可済みの会計ラベル</p>
           {labels.length > 0 ? (
             <ul>{labels.map((label) => <li key={label}>{label}</li>)}</ul>
           ) : (
-            <p>既知の見出しを検出できませんでした。</p>
+            <p>許可済みの会計ラベルを検出できませんでした。</p>
           )}
-          <a
-            className="safe-report-download"
-            download="sbi-balance-report-safe-structure.json"
-            href={reportHref}
-          >
+          <a className="safe-report-download" download="sbi-distribution-safe-structure.json" href={reportHref}>
             安全な構造レポートを保存
           </a>
-          <p className="preview-note">元PDFではなく、保存したJSONだけを共有できます。</p>
+          <p className="preview-note">元PDFではなく、保存した安全なJSONだけを共有できます。</p>
         </section>
       ) : null}
     </>

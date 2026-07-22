@@ -14,6 +14,11 @@ const importContentSecurityPolicy = [
   "frame-ancestors 'none'",
 ].join('; ');
 
+const distributionReportContentSecurityPolicy = importContentSecurityPolicy.replace(
+  "connect-src 'self'",
+  "connect-src 'none'",
+);
+
 
 const deviceEnrollmentContentSecurityPolicy = [
   "default-src 'self'",
@@ -39,11 +44,20 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        source: '/imports/sbi/:path*',
+        source: '/imports/sbi((?!/distribution-report$).*)',
         headers: [
           { key: 'Content-Security-Policy', value: importContentSecurityPolicy },
           { key: 'Referrer-Policy', value: 'no-referrer' },
           { key: 'Cache-Control', value: 'no-store' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+        ],
+      },
+      {
+        source: '/imports/sbi/distribution-report',
+        headers: [
+          { key: 'Content-Security-Policy', value: distributionReportContentSecurityPolicy },
+          { key: 'Referrer-Policy', value: 'no-referrer' },
+          { key: 'Cache-Control', value: 'private, no-store' },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
         ],
       },

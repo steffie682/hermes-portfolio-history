@@ -53,6 +53,8 @@ describe('SBI import client', () => {
     expect(screen.getByText('開始時点の保有残高が必要です')).toBeTruthy();
     expect(screen.getByText('再投資口数の準備 1 / 1件')).toBeTruthy();
     expect(screen.getByText('分配金・税・取得価額の詳細が必要です')).toBeTruthy();
+    expect(screen.getByRole('link', { name: '分配金・再投資PDFの構造を確認する' }).getAttribute('href'))
+      .toBe('/imports/sbi/distribution-report');
     expect(screen.getByRole('link', { name: '取引残高報告書を確認する' }).getAttribute('href')).toBe('/imports/sbi/balance-report');
     expect(screen.getByRole('button', { name: '非公開で保存して確認' }).hasAttribute('disabled')).toBe(false);
     expect(screen.getByRole('button', { name: '取込を確定' }).hasAttribute('disabled')).toBe(true);
