@@ -10,6 +10,8 @@ export interface PdfStructurePage {
   pageNumber: number;
   width: number;
   height: number;
+  rawItemCount?: number;
+  discardedItemCount?: number;
   items: PdfStructureItem[];
 }
 
@@ -68,17 +70,32 @@ function buildSafeReport<TDocumentKind extends string>(
   documentKind: TDocumentKind,
 ) {
   const itemCount = pages.reduce((total, page) => total + page.items.length, 0);
-  if (pages.length > MAX_PAGES || itemCount > MAX_ITEMS) {
+  const pageDiagnostics = pages.map((page) => {
+    const rawItemCount = page.rawItemCount ?? page.items.length;
+    const discardedItemCount = page.discardedItemCount ?? 0;
+    const valid = Number.isInteger(rawItemCount)
+      && rawItemCount >= 0
+      && rawItemCount <= MAX_ITEMS
+      && Number.isInteger(discardedItemCount)
+      && discardedItemCount >= 0
+      && discardedItemCount <= MAX_ITEMS
+      && rawItemCount === page.items.length + discardedItemCount;
+    if (!valid) throw new Error('SBI取引残高報告書PDFの構造が大きすぎます');
+    return { rawItemCount, discardedItemCount };
+  });
+  const rawItemCount = pageDiagnostics.reduce((total, page) => total + page.rawItemCount, 0);
+  if (pages.length > MAX_PAGES || itemCount > MAX_ITEMS || rawItemCount > MAX_ITEMS) {
     throw new Error('SBI取引残高報告書PDFの構造が大きすぎます');
   }
   return {
     schemaVersion: 1 as const,
     documentKind,
     pageCount: pages.length,
-    pages: pages.map((page) => ({
+    pages: pages.map((page, index) => ({
       pageNumber: page.pageNumber,
       width: rounded(page.width),
       height: rounded(page.height),
+      ...pageDiagnostics[index],
       items: page.items.map((item): SafePdfStructureItem => ({
         ...classify(item.text, knownLabels),
         x: rounded(item.x),

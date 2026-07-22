@@ -103,7 +103,14 @@ export async function extractPdfStructure(
           height: item.height,
         });
       }
-      pages.push({ pageNumber, width: viewport.width, height: viewport.height, items });
+      pages.push({
+        pageNumber,
+        width: viewport.width,
+        height: viewport.height,
+        rawItemCount: content.items.length,
+        discardedItemCount: content.items.length - items.length,
+        items,
+      });
     }
     return pages;
   } finally {

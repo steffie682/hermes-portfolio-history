@@ -36,6 +36,46 @@ describe('SBI income document safe structure', () => {
     }
   });
 
+  it('serializes only bounded diagnostic counts and defaults omitted metadata from accepted items', () => {
+    const report = buildSbiIncomeStructureSafeReport([
+      {
+        pageNumber: 1,
+        width: 600,
+        height: 320,
+        rawItemCount: 3,
+        discardedItemCount: 2,
+        items: [{ text: 'CANARY_ACCEPTED_PRIVATE_TEXT', x: 10, y: 10, width: 10, height: 10 }],
+      },
+      {
+        pageNumber: 2,
+        width: 600,
+        height: 320,
+        items: [{ text: 'CANARY_SYNTHETIC_PRIVATE_TEXT', x: 20, y: 20, width: 10, height: 10 }],
+      },
+    ]);
+
+    expect(report.schemaVersion).toBe(1);
+    expect(report.pages).toEqual([
+      expect.objectContaining({ rawItemCount: 3, discardedItemCount: 2 }),
+      expect.objectContaining({ rawItemCount: 1, discardedItemCount: 0 }),
+    ]);
+    const serialized = JSON.stringify(report);
+    expect(serialized).not.toContain('CANARY_');
+    expect(serialized).not.toContain('reason');
+  });
+
+  it.each([
+    { rawItemCount: Number.NaN, discardedItemCount: 0 },
+    { rawItemCount: 1.5, discardedItemCount: 0 },
+    { rawItemCount: -1, discardedItemCount: 0 },
+    { rawItemCount: 20_001, discardedItemCount: 20_001 },
+    { rawItemCount: 0, discardedItemCount: 1 },
+  ])('rejects unsafe diagnostic counts %#', (metadata) => {
+    expect(() => buildSbiIncomeStructureSafeReport([{
+      pageNumber: 1, width: 1, height: 1, items: [], ...metadata,
+    }])).toThrow('構造が大きすぎます');
+  });
+
   it('bounds pages and items', () => {
     expect(() => buildSbiIncomeStructureSafeReport(Array.from({ length: 101 }, (_, index) => ({
       pageNumber: index + 1, width: 1, height: 1, items: [],

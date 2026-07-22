@@ -80,6 +80,9 @@ export default function SbiDistributionReportClient({
   const labels = report
     ? [...new Set(report.pages.flatMap((page) => page.items.flatMap((item) => item.labels ?? [])))]
     : [];
+  const acceptedItemCount = report
+    ? report.pages.reduce((total, page) => total + page.items.length, 0)
+    : 0;
   const reportHref = report
     ? `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(report, null, 2))}`
     : '';
@@ -107,6 +110,12 @@ export default function SbiDistributionReportClient({
           ) : (
             <p>許可済みの会計ラベルを検出できませんでした。</p>
           )}
+          {acceptedItemCount === 0 ? (
+            <p>
+              PDFからテキスト項目を抽出できませんでした。
+              保存される安全なJSONに追加される診断情報は、非機密のカウントのみです。
+            </p>
+          ) : null}
           <a className="safe-report-download" download="sbi-distribution-safe-structure.json" href={reportHref}>
             安全な構造レポートを保存
           </a>

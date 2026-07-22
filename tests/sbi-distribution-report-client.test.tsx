@@ -8,6 +8,7 @@ const safeReport = {
   pageCount: 1,
   pages: [{
     pageNumber: 1, width: 600, height: 840,
+    rawItemCount: 2, discardedItemCount: 0,
     items: [
       { kind: 'known-label' as const, labels: ['収益分配金', '再投資'], x: 100, y: 800, width: 100, height: 10 },
       { kind: 'masked-text' as const, x: 400, y: 800, width: 80, height: 10 },
@@ -70,6 +71,25 @@ describe('SBI distribution report client', () => {
     expect(boundary.textContent).toContain('まだ解決しません');
     expect(screen.getByText(/安全なJSONだけを共有した後、実装を続けられます/)).toBeTruthy();
     expect(screen.queryByText(/元のPDFを共有/)).toBeNull();
+  });
+
+  it('explains an empty successful extraction and that saved JSON has diagnostic counts only', async () => {
+    const emptyReport = {
+      ...safeReport,
+      pages: [{
+        pageNumber: 1, width: 600, height: 320,
+        rawItemCount: 0, discardedItemCount: 0, items: [],
+      }],
+    };
+    render(<SbiDistributionReportClient inspectPdf={vi.fn().mockResolvedValue(emptyReport)} />);
+    choose(pdfFile());
+
+    expect(await screen.findByText('PDF 1ページ')).toBeTruthy();
+    const message = screen.getByText(/テキスト項目を抽出できませんでした/);
+    expect(message.textContent).toContain('保存される安全なJSON');
+    expect(message.textContent).toContain('追加される診断情報');
+    expect(message.textContent).toContain('非機密のカウントのみ');
+    expect(message.textContent).not.toContain('会計インポートは解決');
   });
 
   it('rejects an oversized file before reading it', async () => {

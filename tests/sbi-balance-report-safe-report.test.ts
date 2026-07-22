@@ -22,6 +22,7 @@ describe('SBI balance report safe structure', () => {
       schemaVersion: 1,
       documentKind: 'sbi-balance-report-structure',
       pageCount: 1,
+      pages: [{ rawItemCount: 7, discardedItemCount: 0 }],
     });
     expect(report.pages[0].items).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'known-label', labels: ['取引残高報告書'], x: 100, y: 800 }),

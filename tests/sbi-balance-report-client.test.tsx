@@ -11,6 +11,8 @@ const safeReport = {
     pageNumber: 1,
     width: 600,
     height: 840,
+    rawItemCount: 2,
+    discardedItemCount: 0,
     items: [
       { kind: 'known-label' as const, labels: ['取引残高報告書', '信用取引'], x: 100, y: 800, width: 100, height: 10 },
       { kind: 'masked-text' as const, x: 400, y: 800, width: 80, height: 10 },

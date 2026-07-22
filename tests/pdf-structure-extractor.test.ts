@@ -67,10 +67,37 @@ describe('PDF structure extractor', () => {
       pageNumber: 1,
       width: 595,
       height: 842,
+      rawItemCount: 2,
+      discardedItemCount: 1,
       items: [{ text: '信用取引', x: 101, y: 702, width: 80, height: 12 }],
     }]);
     expect(loader).toHaveBeenCalledWith(expect.objectContaining({ data: expect.any(Uint8Array), isEvalSupported: false }));
     expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('distinguishes zero raw items from raw items discarded by the text guard', async () => {
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const getPage = vi.fn()
+      .mockResolvedValueOnce({
+        getViewport: () => ({ width: 600, height: 320 }),
+        getTextContent: vi.fn().mockResolvedValue({ items: [] }),
+      })
+      .mockResolvedValueOnce({
+        getViewport: () => ({ width: 600, height: 320 }),
+        getTextContent: vi.fn().mockResolvedValue({ items: [
+          { type: 'beginMarkedContent', canary: 'CANARY_REJECTED_VALUE' },
+          { str: 'missing geometry', canary: 'CANARY_REJECTED_TEXT' },
+        ] }),
+      });
+    const loader = vi.fn(() => ({ destroy, promise: Promise.resolve({ numPages: 2, getPage }) }));
+
+    const pages = await extractPdfStructure(new Uint8Array([1, 2, 3]), loader);
+
+    expect(pages).toEqual([
+      { pageNumber: 1, width: 600, height: 320, rawItemCount: 0, discardedItemCount: 0, items: [] },
+      { pageNumber: 2, width: 600, height: 320, rawItemCount: 2, discardedItemCount: 2, items: [] },
+    ]);
+    expect(JSON.stringify(pages)).not.toContain('CANARY_REJECTED');
   });
 
   it.each([Number.NaN, 1.5])(
