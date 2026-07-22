@@ -12,7 +12,7 @@ export interface PdfStructurePage {
   height: number;
   rawItemCount?: number;
   discardedItemCount?: number;
-  extractionMode?: 'text-content' | 'xfa' | 'none';
+  extractionMode?: 'text-content' | 'xfa' | 'annotations' | 'none';
   items: PdfStructureItem[];
 }
 

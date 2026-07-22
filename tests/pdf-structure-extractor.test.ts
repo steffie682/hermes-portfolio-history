@@ -3,6 +3,22 @@ import { extractPdfStructure } from '@/import/sbi/pdf-structure-extractor';
 import { buildSbiIncomeStructureSafeReport } from '@/import/sbi/balance-report-safe-report';
 
 describe('PDF structure extractor', () => {
+  function annotationLoader(annotations: unknown[], overrides: Record<string, unknown> = {}) {
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const getAnnotations = vi.fn().mockResolvedValue(annotations);
+    const loader = vi.fn(() => ({ destroy, promise: Promise.resolve({
+      numPages: 1,
+      getPage: vi.fn().mockResolvedValue({
+        getViewport: () => ({ width: 600, height: 320 }),
+        getTextContent: vi.fn().mockResolvedValue({ items: [] }),
+        getXfa: vi.fn().mockResolvedValue(null),
+        getAnnotations,
+        ...overrides,
+      }),
+    }) }));
+    return { destroy, getAnnotations, loader };
+  }
+
   it('enables XFA parsing without enabling eval or DOM rendering', async () => {
     const loader = vi.fn(() => ({
       destroy: vi.fn().mockResolvedValue(undefined),
@@ -227,6 +243,210 @@ describe('PDF structure extractor', () => {
       rawItemCount: 0, discardedItemCount: 0, items: [],
     }]);
     expect(getXfa).toHaveBeenCalledOnce();
+  });
+
+  it('falls back to allowlisted annotation text and emits only safe classifications', async () => {
+    const annotations = [
+      {
+        fieldName: '収益分配金',
+        fieldValue: 'PRIVATE_ACCOUNT_CANARY',
+        rect: [101, 42, 184, 54],
+        id: 'CANARY_ID',
+        url: 'https://CANARY_URL.invalid',
+        action: 'CANARY_ACTION',
+      },
+      { fieldValue: ['2026/07/22', '12,345円'], rect: [20, 30, 10, 5] },
+      { contentsObj: { str: '再投資口数' }, rect: [0, 1, Number.NaN, 4] },
+      { fieldValue: 12345, fieldName: null, contentsObj: { str: 42 } },
+    ];
+    const { getAnnotations, loader } = annotationLoader(annotations);
+
+    const pages = await extractPdfStructure(new Uint8Array([1]), loader);
+    const safeJson = JSON.stringify(buildSbiIncomeStructureSafeReport(pages));
+
+    expect(getAnnotations).toHaveBeenCalledWith({ intent: 'display' });
+    expect(pages[0]).toMatchObject({ extractionMode: 'annotations', rawItemCount: 5, discardedItemCount: 0 });
+    expect(JSON.parse(safeJson).pages[0].items).toEqual([
+      { kind: 'known-label', labels: ['収益分配金'], x: 100, y: 40, width: 80, height: 10 },
+      { kind: 'masked-text', x: 100, y: 40, width: 80, height: 10 },
+      { kind: 'date', x: 10, y: 10, width: 10, height: 30 },
+      { kind: 'number', x: 10, y: 10, width: 10, height: 30 },
+      { kind: 'known-label', labels: ['再投資', '再投資口数', '口数'], x: 0, y: 0, width: 0, height: 0 },
+    ]);
+    expect(safeJson).not.toMatch(/PRIVATE_ACCOUNT_CANARY|2026\/07\/22|12,345|CANARY|https:/);
+  });
+
+  it('does not access or serialize irrelevant annotation getters', async () => {
+    const annotation: Record<string, unknown> = { fieldValue: '口数', rect: [1, 2, 3, 4] };
+    for (const key of ['id', 'url', 'actions', 'js', 'alternativeText', 'title', 'filename', 'metadata']) {
+      Object.defineProperty(annotation, key, { get: () => { throw new Error(`accessed ${key}`); } });
+    }
+    const { loader } = annotationLoader([annotation]);
+
+    const pages = await extractPdfStructure(new Uint8Array([1]), loader);
+
+    expect(JSON.stringify(buildSbiIncomeStructureSafeReport(pages))).not.toContain('accessed');
+  });
+
+  it('fails before reading any getter on the next annotation after the item budget is exhausted', async () => {
+    const late = {};
+    const getters = new Map<string, ReturnType<typeof vi.fn>>();
+    for (const key of ['rect', 'fieldName', 'fieldValue', 'contentsObj']) {
+      const getter = vi.fn(() => { throw new Error(`CANARY_ACCESSED_${key}`); });
+      getters.set(key, getter);
+      Object.defineProperty(late, key, { get: getter });
+    }
+    const annotations = [
+      ...Array.from({ length: 10_000 }, () => ({ fieldName: '口', fieldValue: '数' })),
+      late,
+    ];
+    const { destroy, loader } = annotationLoader(annotations);
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader))
+      .rejects.toThrow('構造が大きすぎます');
+    for (const getter of getters.values()) expect(getter).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('fails before reading fieldValue when fieldName consumes the last item slot', async () => {
+    const getFieldValue = vi.fn(() => { throw new Error('CANARY_ACCESSED_fieldValue'); });
+    const last = Object.defineProperty({ fieldName: '口' }, 'fieldValue', {
+      get: getFieldValue,
+    });
+    const annotations = [
+      ...Array.from({ length: 9_999 }, () => ({ fieldName: '口', fieldValue: '数' })),
+      { fieldName: '口' },
+      last,
+    ];
+    const { loader } = annotationLoader(annotations);
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader))
+      .rejects.toThrow('構造が大きすぎます');
+    expect(getFieldValue).not.toHaveBeenCalled();
+  });
+
+  it('fails before reading contentsObj when fieldValue consumes the last item slot', async () => {
+    const getContentsObj = vi.fn(() => { throw new Error('CANARY_ACCESSED_contentsObj'); });
+    const last = Object.defineProperty({ fieldValue: '口' }, 'contentsObj', {
+      get: getContentsObj,
+    });
+    const annotations = [
+      ...Array.from({ length: 9_999 }, () => ({ fieldName: '口', fieldValue: '数' })),
+      { fieldName: '口' },
+      last,
+    ];
+    const { loader } = annotationLoader(annotations);
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader))
+      .rejects.toThrow('構造が大きすぎます');
+    expect(getContentsObj).not.toHaveBeenCalled();
+  });
+
+  it('counts only emitted strings in annotation fieldValue arrays', async () => {
+    const annotations = [
+      ...Array.from({ length: 9_999 }, () => ({ fieldName: '口', fieldValue: '数' })),
+      { fieldValue: [0, { raw: 'PRIVATE_ARRAY_CANARY' }, '口'] },
+    ];
+    const { loader } = annotationLoader(annotations);
+
+    const pages = await extractPdfStructure(new Uint8Array([1]), loader);
+    const safeJson = JSON.stringify(buildSbiIncomeStructureSafeReport(pages));
+
+    expect(pages[0]).toMatchObject({ extractionMode: 'annotations', rawItemCount: 19_999 });
+    expect(pages[0]?.items).toHaveLength(19_999);
+    expect(pages[0]?.items.at(-1)).toEqual({ text: '口', x: 0, y: 0, width: 0, height: 0 });
+    expect(safeJson).not.toMatch(/PRIVATE_ARRAY_CANARY|"text"|"raw"/);
+  });
+
+  it('fails before reading a fieldValue array entry after the item budget is exhausted', async () => {
+    const getLateEntry = vi.fn(() => { throw new Error('CANARY_ACCESSED_LATE_ARRAY_ENTRY'); });
+    const fieldValue: unknown[] = [0, '口'];
+    Object.defineProperty(fieldValue, 2, { get: getLateEntry });
+    const annotations = [
+      ...Array.from({ length: 9_999 }, () => ({ fieldName: '口', fieldValue: '数' })),
+      { fieldName: '口' },
+      { fieldValue },
+    ];
+    const { loader } = annotationLoader(annotations);
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader))
+      .rejects.toThrow('構造が大きすぎます');
+    expect(getLateEntry).not.toHaveBeenCalled();
+  });
+
+  it('zeros annotation geometry when finite coordinates produce non-finite derived values', async () => {
+    const { loader } = annotationLoader([{
+      fieldValue: '口数',
+      rect: [-Number.MAX_VALUE, -Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE],
+    }]);
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader)).resolves.toEqual([
+      expect.objectContaining({
+        items: [{ text: '口数', x: 0, y: 0, width: 0, height: 0 }],
+      }),
+    ]);
+  });
+
+  it('keeps none diagnostics for empty XFA and annotations without allowed strings', async () => {
+    const { loader } = annotationLoader([{ id: 'CANARY_ID', fieldValue: 1 }, null], {
+      getXfa: vi.fn().mockResolvedValue({ children: [] }),
+    });
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader)).resolves.toEqual([{
+      pageNumber: 1, width: 600, height: 320, extractionMode: 'none',
+      rawItemCount: 0, discardedItemCount: 0, items: [],
+    }]);
+  });
+
+  it('fails closed at the aggregate annotation bound before reading a later value', async () => {
+    const late = Object.defineProperty({}, 'fieldValue', {
+      get: () => { throw new Error('CANARY_LATE_ANNOTATION_WAS_READ'); },
+    });
+    const pageOne = Array.from({ length: 10_000 }, () => ({ fieldValue: '口' }));
+    const pageTwo = [...Array.from({ length: 10_001 }, () => ({ fieldValue: '口' })), late];
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const getPage = vi.fn().mockImplementation(async (pageNumber: number) => ({
+      getViewport: () => ({ width: 600, height: 320 }),
+      getTextContent: () => Promise.resolve({ items: [] }),
+      getXfa: () => Promise.resolve(null),
+      getAnnotations: () => Promise.resolve(pageNumber === 1 ? pageOne : pageTwo),
+    }));
+    const loader = vi.fn(() => ({ destroy, promise: Promise.resolve({ numPages: 2, getPage }) }));
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader)).rejects.toThrow('構造が大きすぎます');
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed at the aggregate annotation text bound before a later annotation', async () => {
+    const late = Object.defineProperty({}, 'fieldValue', {
+      get: () => { throw new Error('CANARY_LATE_ANNOTATION_TEXT_WAS_READ'); },
+    });
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const getPage = vi.fn().mockImplementation(async (pageNumber: number) => ({
+      getViewport: () => ({ width: 600, height: 320 }),
+      getTextContent: () => Promise.resolve({ items: [] }),
+      getXfa: () => Promise.resolve(null),
+      getAnnotations: () => Promise.resolve(pageNumber === 1
+        ? [{ fieldValue: 'a'.repeat(1_000_000) }]
+        : [{ fieldValue: 'b'.repeat(1_000_001) }, late]),
+    }));
+    const loader = vi.fn(() => ({ destroy, promise: Promise.resolve({ numPages: 2, getPage }) }));
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader)).rejects.toThrow('構造が大きすぎます');
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('destroys once and rejects promptly when aborted during getAnnotations', async () => {
+    const controller = new AbortController();
+    const getAnnotations = vi.fn(() => new Promise<never>(() => undefined));
+    const { destroy, loader } = annotationLoader([], { getAnnotations });
+    const extraction = extractPdfStructure(new Uint8Array([1]), loader, controller.signal);
+
+    await vi.waitFor(() => expect(getAnnotations).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(extraction).rejects.toHaveProperty('name', 'AbortError');
+    expect(destroy).toHaveBeenCalledOnce();
   });
 
   it('skips cyclic XFA references safely', async () => {

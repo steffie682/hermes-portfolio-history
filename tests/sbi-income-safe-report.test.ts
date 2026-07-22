@@ -64,6 +64,17 @@ describe('SBI income document safe structure', () => {
     expect(serialized).not.toContain('reason');
   });
 
+  it('includes the annotations extraction mode without exposing raw annotation text', () => {
+    const report = buildSbiIncomeStructureSafeReport([{
+      pageNumber: 1, width: 600, height: 320, extractionMode: 'annotations',
+      rawItemCount: 1, discardedItemCount: 0,
+      items: [{ text: 'PRIVATE_ANNOTATION_CANARY', x: 12, y: 18, width: 20, height: 10 }],
+    }]);
+
+    expect(report.pages[0]).toMatchObject({ extractionMode: 'annotations', rawItemCount: 1 });
+    expect(JSON.stringify(report)).not.toContain('PRIVATE_ANNOTATION_CANARY');
+  });
+
   it.each([
     { rawItemCount: Number.NaN, discardedItemCount: 0 },
     { rawItemCount: 1.5, discardedItemCount: 0 },
