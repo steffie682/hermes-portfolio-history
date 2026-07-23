@@ -5,6 +5,7 @@ const labels: Readonly<Record<string, string>> = {
   'invalid-quantity': '数量を確認してください',
   'invalid-unit-price': '単価を確認してください',
   'missing-settlement-amount': '受渡金額を確認してください',
+  'needs-distribution-details': '分配金再投資の通知書明細を入力してください',
 };
 
 export function importReasonLabel(reasonCode: string | null) {

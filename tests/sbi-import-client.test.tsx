@@ -289,6 +289,35 @@ describe('SBI import client', () => {
     expect(screen.queryByText('確定済み 1件')).toBeNull();
   });
 
+  it('shows safe actionable guidance when distribution details still require resolution', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          batchId: '10000000-0000-4000-8000-000000000001',
+          disposition: 'new',
+          counts: { new: 1, duplicate: 0, needsReview: 1, rejected: 0 },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        json: async () => ({ error: { code: 'distribution_details_required' } }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+    renderClient();
+    choose(fileLike(csvBytes(['株式現物買'])));
+    expect(await screen.findByText('取引 1件')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '非公開で保存して確認' }));
+    expect(await screen.findByText('新規 1件')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '取込を確定' }));
+
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      '分配金・再投資の詳細を原本行との対応画面で入力してから確定してください。',
+    );
+    expect(screen.queryByText('確定済み 1件')).toBeNull();
+  });
+
 
   it('shows an actionable message for a server-rejected CSV', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({

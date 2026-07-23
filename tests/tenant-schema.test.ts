@@ -27,7 +27,7 @@ describe('tenant-owned schema', () => {
       [importBatches, 'import_batches', 'import_batches_owner_isolation'],
       [sourceRecords, 'source_records', 'source_records_owner_isolation'],
       [stagedEvents, 'staged_events', 'staged_events_owner_isolation'],
-      [ledgerEvents, 'ledger_events', 'ledger_events_owner_isolation'],
+      [ledgerEvents, 'ledger_events', 'ledger_events_owner_select'],
     ] as const;
 
     for (const [table, name, policy] of expected) {
@@ -63,6 +63,35 @@ describe('tenant-owned schema', () => {
     );
     expect(ledgerIndex?.config.unique).toBe(true);
     expect(getTableColumns(ledgerEvents).fingerprint.notNull).toBe(true);
+  });
+
+  it('makes committed ledger policies owner-scoped and append-only', () => {
+    const policies = getTableConfig(ledgerEvents).policies;
+
+    expect(policies.map((policy) => ({
+      name: policy.name,
+      for: policy.for,
+      hasUsing: policy.using !== undefined,
+      hasWithCheck: policy.withCheck !== undefined,
+    }))).toEqual([
+      {
+        name: 'ledger_events_owner_select',
+        for: 'select',
+        hasUsing: true,
+        hasWithCheck: false,
+      },
+      {
+        name: 'ledger_events_owner_insert',
+        for: 'insert',
+        hasUsing: false,
+        hasWithCheck: true,
+      },
+    ]);
+    expect(policies.some((policy) => (
+      policy.for === 'all'
+      || policy.for === 'update'
+      || policy.for === 'delete'
+    ))).toBe(false);
   });
 
   it('enables row-level security with an owner policy', () => {

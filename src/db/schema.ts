@@ -269,9 +269,12 @@ export const ledgerEvents = pgTable.withRLS(
       foreignColumns: [stagedEvents.ownerUserId, stagedEvents.brokerAccountId, stagedEvents.id],
     }).onDelete('restrict'),
     check('ledger_events_fingerprint_check', sql`char_length(${table.fingerprint}) = 64 AND ${table.fingerprint} ~ '^[0-9a-f]{64}$'`),
-    pgPolicy('ledger_events_owner_isolation', {
-      for: 'all', to: 'public',
+    pgPolicy('ledger_events_owner_select', {
+      for: 'select', to: 'public',
       using: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')`,
+    }),
+    pgPolicy('ledger_events_owner_insert', {
+      for: 'insert', to: 'public',
       withCheck: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')`,
     }),
   ],

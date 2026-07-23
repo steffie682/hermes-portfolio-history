@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, ne, sql } from 'drizzle-orm';
 import {
   authenticatedPrincipalId,
   type AuthenticatedPrincipal,
@@ -19,6 +19,11 @@ import {
   type PrivateSourceStorage,
 } from './private-source-storage';
 import { inspectSbiSourceFile } from './source-file-intake';
+import {
+  compareCanonicalDecimals,
+  MAX_DISTRIBUTION_DETAILS_BYTES,
+  type DistributionReinvestmentDetails,
+} from './sbi/distribution-reinvestment-details';
 
 const PARSER_NAME = 'sbi-trade-history';
 const PARSER_VERSION = '1';
@@ -42,7 +47,7 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
-function economicFingerprint(input: {
+export function economicFingerprint(input: {
   brokerAccountId: string;
   eventKind: string;
   payload: unknown;
@@ -53,6 +58,76 @@ function economicFingerprint(input: {
     eventKind: input.eventKind,
     payload: canonicalize(input.payload),
   }));
+}
+
+export type DistributionResolutionErrorCode =
+  | 'invalid_import'
+  | 'detail_mismatch'
+  | 'already_resolved';
+
+export class DistributionResolutionError extends Error {
+  constructor(readonly code: DistributionResolutionErrorCode) {
+    super(code);
+  }
+}
+
+export type CommitBatchErrorCode = 'distribution_details_required';
+
+export class CommitBatchError extends Error {
+  constructor(readonly code: CommitBatchErrorCode) {
+    super(code);
+  }
+}
+
+type DistributionPartial = {
+  sourceRowNumber: number;
+  assetClass: 'fund';
+  operation: 'reinvestment-units';
+  instrument: { securityCode: string | null; securityName: string };
+  contractDate: string;
+  settlementDate: string;
+  custodyType: string;
+  taxationType: string;
+  quantityIncrease: string;
+  sourceQuotedUnitPrice: { value: string; basis: 'unverified' };
+  cashTreatment: 'unresolved';
+  taxTreatment: 'unresolved';
+  costBasisTreatment: 'unresolved';
+};
+
+function isDistributionPartial(value: unknown): value is DistributionPartial {
+  if (!value || typeof value !== 'object') return false;
+  const partial = value as Record<string, unknown>;
+  const instrument = partial.instrument as Record<string, unknown> | null;
+  const quoted = partial.sourceQuotedUnitPrice as Record<string, unknown> | null;
+  const keys = Object.keys(partial).sort();
+  const expectedKeys = [
+    'sourceRowNumber', 'assetClass', 'operation', 'instrument', 'contractDate',
+    'settlementDate', 'custodyType', 'taxationType', 'quantityIncrease',
+    'sourceQuotedUnitPrice', 'cashTreatment', 'taxTreatment', 'costBasisTreatment',
+  ].sort();
+  return keys.length === expectedKeys.length
+    && keys.every((key, index) => key === expectedKeys[index])
+    && new TextEncoder().encode(JSON.stringify(value)).byteLength <= MAX_DISTRIBUTION_DETAILS_BYTES
+    && partial.assetClass === 'fund'
+    && partial.operation === 'reinvestment-units'
+    && Number.isSafeInteger(partial.sourceRowNumber)
+    && typeof partial.contractDate === 'string'
+    && typeof partial.settlementDate === 'string'
+    && typeof partial.custodyType === 'string'
+    && typeof partial.taxationType === 'string'
+    && typeof partial.quantityIncrease === 'string'
+    && instrument !== null
+    && Object.keys(instrument).sort().join(',') === 'securityCode,securityName'
+    && (typeof instrument.securityCode === 'string' || instrument.securityCode === null)
+    && typeof instrument.securityName === 'string'
+    && quoted !== null
+    && Object.keys(quoted).sort().join(',') === 'basis,value'
+    && typeof quoted.value === 'string'
+    && quoted.basis === 'unverified'
+    && partial.cashTreatment === 'unresolved'
+    && partial.taxTreatment === 'unresolved'
+    && partial.costBasisTreatment === 'unresolved';
 }
 
 async function duplicateResult(tx: Transaction, sourceDocumentId: string) {
@@ -350,7 +425,10 @@ export function createImportRepository(
               reasonCode: row.status === 'new' ? null : row.reasonCode,
               eventKind: row.status === 'new' ? row.eventKind : null,
               fingerprint,
-              payload: row.status === 'new' ? row.payload : null,
+              payload: row.status === 'new'
+                || (row.status === 'needs_review' && row.reasonCode === 'needs-distribution-details')
+                ? row.payload
+                : null,
             });
           }
 
@@ -440,6 +518,140 @@ export function createImportRepository(
         };
       });
     },
+    async resolveDistributionDetails(input: {
+      principal: AuthenticatedPrincipal;
+      batchId: string;
+      details: DistributionReinvestmentDetails;
+    }) {
+      const ownerUserId = authenticatedPrincipalId(input.principal);
+      return db.transaction(async (tx) => {
+        await tx.execute(sql`select set_config('app.current_user_id', ${ownerUserId}, true)`);
+        const [batch] = await tx
+          .select({
+            id: importBatches.id,
+            status: importBatches.status,
+            brokerAccountId: importBatches.brokerAccountId,
+          })
+          .from(importBatches)
+          .where(and(
+            eq(importBatches.id, input.batchId),
+            eq(importBatches.ownerUserId, ownerUserId),
+          ))
+          .limit(1)
+          .for('update');
+        if (!batch) throw new DistributionResolutionError('invalid_import');
+
+        const [staged] = await tx
+          .select({
+            id: stagedEvents.id,
+            status: stagedEvents.status,
+            reasonCode: stagedEvents.reasonCode,
+            eventKind: stagedEvents.eventKind,
+            payload: stagedEvents.payload,
+          })
+          .from(stagedEvents)
+          .innerJoin(sourceRecords, eq(sourceRecords.id, stagedEvents.sourceRecordId))
+          .where(and(
+            eq(stagedEvents.batchId, batch.id),
+            eq(stagedEvents.ownerUserId, ownerUserId),
+            eq(sourceRecords.ownerUserId, ownerUserId),
+            eq(sourceRecords.sourceRow, input.details.sourceRowNumber),
+          ))
+          .limit(1)
+          .for('update', { of: stagedEvents });
+        if (!staged) throw new DistributionResolutionError('invalid_import');
+
+        if (batch.status !== 'preview_ready') {
+          throw new DistributionResolutionError(
+            staged.eventKind === 'fund-distribution-reinvestment'
+              ? 'already_resolved'
+              : 'invalid_import',
+          );
+        }
+        if (staged.eventKind === 'fund-distribution-reinvestment') {
+          const finalPayload = staged.payload as Record<string, unknown> | null;
+          if (finalPayload
+            && JSON.stringify(canonicalize(finalPayload.reinvestmentDetails)) === JSON.stringify(canonicalize({
+              ...input.details,
+              provenance: 'manual-transcription',
+            }))) {
+            return {
+              batchId: batch.id,
+              sourceRowNumber: input.details.sourceRowNumber,
+              status: staged.status as 'new' | 'duplicate',
+            };
+          }
+          throw new DistributionResolutionError('already_resolved');
+        }
+        if (staged.status !== 'needs_review'
+          || staged.reasonCode !== 'needs-distribution-details'
+          || !isDistributionPartial(staged.payload)
+          || staged.payload.sourceRowNumber !== input.details.sourceRowNumber) {
+          throw new DistributionResolutionError('invalid_import');
+        }
+        const partial = staged.payload;
+        if ((input.details.reinvestmentDate !== partial.contractDate
+            && input.details.reinvestmentDate !== partial.settlementDate)
+          || compareCanonicalDecimals(input.details.reinvestmentQuantity, partial.quantityIncrease) !== 0
+          || compareCanonicalDecimals(input.details.navPerTenThousand, partial.sourceQuotedUnitPrice.value) !== 0) {
+          throw new DistributionResolutionError('detail_mismatch');
+        }
+
+        const payload = {
+          ...partial,
+          sourceQuotedUnitPrice: {
+            value: partial.sourceQuotedUnitPrice.value,
+            basis: 'per-ten-thousand-units-confirmed-by-notice' as const,
+          },
+          reinvestmentDetails: {
+            ...input.details,
+            provenance: 'manual-transcription' as const,
+          },
+          cashTreatment: 'net-distribution-reinvested' as const,
+          taxTreatment: 'gross-distribution-and-withholding-unresolved' as const,
+          costBasisTreatment: 'recorded-reinvestment-amount-added-existing-principal-not-reduced' as const,
+        };
+        const eventKind = 'fund-distribution-reinvestment';
+        const fingerprint = economicFingerprint({
+          brokerAccountId: batch.brokerAccountId,
+          eventKind,
+          payload,
+        });
+        const [ledgerCollision] = await tx
+          .select({ id: ledgerEvents.id })
+          .from(ledgerEvents)
+          .where(and(
+            eq(ledgerEvents.ownerUserId, ownerUserId),
+            eq(ledgerEvents.fingerprint, fingerprint),
+          ))
+          .limit(1);
+        const [batchCollision] = await tx
+          .select({ id: stagedEvents.id })
+          .from(stagedEvents)
+          .where(and(
+            eq(stagedEvents.ownerUserId, ownerUserId),
+            eq(stagedEvents.batchId, batch.id),
+            eq(stagedEvents.fingerprint, fingerprint),
+            ne(stagedEvents.id, staged.id),
+          ))
+          .limit(1);
+        const status = ledgerCollision || batchCollision ? 'duplicate' as const : 'new' as const;
+        await tx
+          .update(stagedEvents)
+          .set({
+            status,
+            reasonCode: null,
+            eventKind,
+            payload,
+            fingerprint,
+          })
+          .where(and(
+            eq(stagedEvents.id, staged.id),
+            eq(stagedEvents.ownerUserId, ownerUserId),
+          ));
+        return { batchId: batch.id, sourceRowNumber: input.details.sourceRowNumber, status };
+      });
+    },
     async commitBatch(input: {
       principal: AuthenticatedPrincipal;
       batchId: string;
@@ -463,6 +675,20 @@ export function createImportRepository(
         if (!batch) throw new Error('Import batch is unavailable');
 
         if (batch.status === 'preview_ready') {
+          const [unresolvedDistribution] = await tx
+            .select({ id: stagedEvents.id })
+            .from(stagedEvents)
+            .where(and(
+              eq(stagedEvents.ownerUserId, ownerUserId),
+              eq(stagedEvents.batchId, batch.id),
+              eq(stagedEvents.status, 'needs_review'),
+              eq(stagedEvents.reasonCode, 'needs-distribution-details'),
+            ))
+            .limit(1);
+          if (unresolvedDistribution) {
+            throw new CommitBatchError('distribution_details_required');
+          }
+
           const candidates = await tx
             .select({
               id: stagedEvents.id,

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { describe, expect, it } from 'vitest';
 import { applyAllMigrations } from './helpers/migrations';
@@ -47,6 +47,38 @@ describe('initial migration', () => {
     ]) {
       expect(sql).toContain(`CONSTRAINT "${constraint}" FOREIGN KEY ("owner_user_id",`);
     }
+  });
+
+  it('remediates committed ledger access for already-migrated databases', () => {
+    const latestDirectory = readdirSync('drizzle', { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort()
+      .at(-1);
+    expect(latestDirectory).toBeDefined();
+    const sql = readFileSync(`drizzle/${latestDirectory}/migration.sql`, 'utf8');
+
+    expect(sql).toContain(
+      'DROP POLICY "ledger_events_owner_isolation" ON "ledger_events";',
+    );
+    expect(sql).toContain(
+      'CREATE POLICY "ledger_events_owner_select" ON "ledger_events" AS PERMISSIVE FOR SELECT TO public USING',
+    );
+    expect(sql).toContain(
+      'CREATE POLICY "ledger_events_owner_insert" ON "ledger_events" AS PERMISSIVE FOR INSERT TO public WITH CHECK',
+    );
+    expect(sql).not.toMatch(
+      /CREATE POLICY "[^"]+" ON "ledger_events" AS PERMISSIVE FOR (?:ALL|UPDATE|DELETE)\b/,
+    );
+    expect(sql).toContain(
+      'ALTER TABLE "ledger_events" FORCE ROW LEVEL SECURITY;',
+    );
+    expect(sql).toContain(
+      'REVOKE UPDATE, DELETE ON "ledger_events" FROM portfolio_app;',
+    );
+    expect(sql).toContain(
+      'GRANT SELECT, INSERT ON "ledger_events" TO portfolio_app;',
+    );
   });
 
   it('applies cleanly with the expected app_metadata constraints', async () => {
