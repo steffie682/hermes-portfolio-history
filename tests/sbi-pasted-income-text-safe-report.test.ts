@@ -2,6 +2,48 @@ import { describe, expect, it } from 'vitest';
 import { buildSbiPastedIncomeTextSafeReport } from '@/import/sbi/pasted-income-text-safe-report';
 
 describe('SBI pasted income text safe report', () => {
+  it('emits confirmed reinvestment headings only and keeps pasted private values out', () => {
+    const raw = [
+      '取引店 CANARY_BRANCH',
+      'お客様の口座番号 987654321',
+      '担当者 CANARY_PERSON',
+      '銘柄名 CANARY_FUND',
+      '再投資日 2026/07/23',
+      '期数 CANARY_TERM',
+      '税区分 CANARY_TAX',
+      '個別元本単価 12,345円',
+      '再投資金額 456,789円',
+      '1 万口あたり 再投資の基準価額 11,223円',
+      '再投資数量 7,654,321口',
+      '備考 備考 CANARY_NOTE',
+      '再投資後の残高 9,999,999口',
+    ].join('\t');
+    const report = buildSbiPastedIncomeTextSafeReport(raw);
+
+    expect(report.pages[0].items.map((item) => item.labels)).toEqual([
+      ['取引店'],
+      ['お客様の口座番号'],
+      ['担当者'],
+      ['銘柄名'],
+      ['再投資', '再投資日'],
+      ['期数'],
+      ['税区分'],
+      ['個別元本', '個別元本単価'],
+      ['再投資', '再投資金額'],
+      ['再投資', '基準価額', '1万口あたり再投資の基準価額'],
+      ['再投資', '再投資数量'],
+      ['備考'],
+      ['再投資', '再投資後の残高'],
+    ]);
+    const serialized = JSON.stringify(report);
+    for (const privateValue of [
+      'CANARY_', '987654321', '2026/07/23', '12,345', '456,789', '11,223', '7,654,321',
+      '9,999,999',
+    ]) {
+      expect(serialized).not.toContain(privateValue);
+    }
+  });
+
   it('classifies known labels while never serializing source canaries, dates, or numbers', () => {
     const report = buildSbiPastedIncomeTextSafeReport(
       '収益分配金\tCANARY_SECRET_VALUE\t2026/07/23\t123,456円',

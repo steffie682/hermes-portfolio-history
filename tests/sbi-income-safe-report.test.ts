@@ -2,6 +2,58 @@ import { describe, expect, it } from 'vitest';
 import { buildSbiIncomeStructureSafeReport } from '@/import/sbi/balance-report-safe-report';
 
 describe('SBI income document safe structure', () => {
+  it('emits every confirmed reinvestment heading without leaking adjacent private values', () => {
+    const confirmedLabels = [
+      '取引店', 'お客様の口座番号', '担当者', '銘柄名', '再投資日', '期数', '税区分',
+      '個別元本単価', '再投資金額', '1万口あたり再投資の基準価額', '再投資数量', '備考',
+      '再投資後の残高',
+    ];
+    const privateValues = [
+      'CANARY_BRANCH_42', 'CANARY_ACCOUNT_9876543', 'CANARY_PERSON', 'CANARY_FUND',
+      'CANARY_DATE_20260723', 'CANARY_TERM_7', 'CANARY_TAX_PRIVATE',
+      'CANARY_UNIT_VALUE_12345', 'CANARY_AMOUNT_456789', 'CANARY_PRICE_11223',
+      'CANARY_QUANTITY_7654321', 'CANARY_NOTE_PRIVATE', 'CANARY_BALANCE_9999999',
+    ];
+    const report = buildSbiIncomeStructureSafeReport([{
+      pageNumber: 1,
+      width: 600,
+      height: 800,
+      items: confirmedLabels.map((label, index) => ({
+        text: `${label} ${privateValues[index]}`,
+        x: index * 10,
+        y: index * 10,
+        width: 100,
+        height: 10,
+      })),
+    }]);
+
+    const emittedLabels = report.pages[0].items.flatMap((item) => item.labels ?? []);
+    for (const label of confirmedLabels) expect(emittedLabels).toContain(label);
+    const serialized = JSON.stringify(report);
+    for (const privateValue of privateValues) expect(serialized).not.toContain(privateValue);
+  });
+
+  it('compacts whitespace, deduplicates repeated headings, and preserves generic matches', () => {
+    const report = buildSbiIncomeStructureSafeReport([{
+      pageNumber: 1,
+      width: 600,
+      height: 800,
+      items: [{
+        text: '再 投 資　1 万口あたり 再投資の基準価額 備考 備考 CANARY_RAW_VALUE',
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 10,
+      }],
+    }]);
+
+    expect(report.pages[0].items[0]).toMatchObject({
+      kind: 'known-label',
+      labels: ['再投資', '基準価額', '1万口あたり再投資の基準価額', '備考'],
+    });
+    expect(JSON.stringify(report)).not.toContain('CANARY_RAW_VALUE');
+  });
+
   it('retains only allowlisted labels and type categories with rounded geometry', () => {
     const report = buildSbiIncomeStructureSafeReport([{
       pageNumber: 1,
