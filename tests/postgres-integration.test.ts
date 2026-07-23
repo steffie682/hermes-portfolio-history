@@ -57,16 +57,32 @@ postgresDescribe('real PostgreSQL tenant security', () => {
         await admin.unsafe(statement);
       }
 
-      const importAcl = await admin<{ table_name: string; allowed: boolean }[]>`
+      const importAcl = await admin<{
+        table_name: string;
+        can_select: boolean;
+        can_insert: boolean;
+        can_update: boolean;
+        can_delete: boolean;
+      }[]>`
         select table_name,
-               has_table_privilege('portfolio_app', format('%I.%I', table_schema, table_name), 'SELECT,INSERT,UPDATE,DELETE') as allowed
+               has_table_privilege('portfolio_app', format('%I.%I', table_schema, table_name), 'SELECT') as can_select,
+               has_table_privilege('portfolio_app', format('%I.%I', table_schema, table_name), 'INSERT') as can_insert,
+               has_table_privilege('portfolio_app', format('%I.%I', table_schema, table_name), 'UPDATE') as can_update,
+               has_table_privilege('portfolio_app', format('%I.%I', table_schema, table_name), 'DELETE') as can_delete
         from information_schema.tables
         where table_schema = 'public'
           and table_name in ('private_source_objects', 'source_documents', 'import_batches', 'source_records', 'staged_events', 'ledger_events')
         order by table_name
       `;
       expect(importAcl).toHaveLength(6);
-      expect(importAcl.every((entry) => entry.allowed)).toBe(true);
+      expect(importAcl.every((entry) => entry.can_select && entry.can_insert)).toBe(true);
+      expect(importAcl.find((entry) => entry.table_name === 'ledger_events')).toMatchObject({
+        can_update: false,
+        can_delete: false,
+      });
+      expect(importAcl.filter((entry) => entry.table_name !== 'ledger_events').every(
+        (entry) => entry.can_update && entry.can_delete,
+      )).toBe(true);
 
       const sourceToken = 'postgres-device-source';
       const sourceHash = hashSessionToken(sourceToken);
@@ -420,6 +436,31 @@ postgresDescribe('real PostgreSQL tenant security', () => {
         select count(*)::int as count from ledger_events
       `;
       expect(ledgerCount.count).toBe(2);
+      const [ownerLedger] = await admin<{ id: string; event_kind: string }[]>`
+        select id, event_kind
+        from ledger_events
+        where owner_user_id = 'user-a'
+        limit 1
+      `;
+      const visibleOwnerLedger = await app.begin(async (tx) => {
+        await tx`select set_config('app.current_user_id', 'user-a', true)`;
+        return tx<{ id: string }[]>`
+          select id from ledger_events where id = ${ownerLedger.id}
+        `;
+      });
+      expect(visibleOwnerLedger).toEqual([{ id: ownerLedger.id }]);
+      await expect(app.begin(async (tx) => {
+        await tx`select set_config('app.current_user_id', 'user-a', true)`;
+        await tx`update ledger_events set event_kind = 'tampered' where id = ${ownerLedger.id}`;
+      })).rejects.toMatchObject({ code: '42501' });
+      await expect(app.begin(async (tx) => {
+        await tx`select set_config('app.current_user_id', 'user-a', true)`;
+        await tx`delete from ledger_events where id = ${ownerLedger.id}`;
+      })).rejects.toMatchObject({ code: '42501' });
+      const [unchangedLedger] = await admin<{ event_kind: string }[]>`
+        select event_kind from ledger_events where id = ${ownerLedger.id}
+      `;
+      expect(unchangedLedger.event_kind).toBe(ownerLedger.event_kind);
 
       const [userBAccount] = await admin<{ id: string }[]>`
         select id from broker_accounts where owner_user_id = 'user-b'
@@ -498,6 +539,22 @@ postgresDescribe('real PostgreSQL tenant security', () => {
       `;
       expect(catalogs).toHaveLength(7);
       expect(catalogs.every((catalog) => catalog.relrowsecurity && catalog.relforcerowsecurity)).toBe(true);
+
+      const ledgerForeignKeyActions = await admin<{
+        conname: string;
+        confdeltype: string;
+      }[]>`
+        select conname, confdeltype
+        from pg_constraint
+        where conrelid = 'ledger_events'::regclass
+          and contype = 'f'
+        order by conname
+      `;
+      expect(ledgerForeignKeyActions).toEqual([
+        { conname: 'ledger_events_owner_account_staged_event_fk', confdeltype: 'r' },
+        { conname: 'ledger_events_owner_broker_account_fk', confdeltype: 'c' },
+        { conname: 'ledger_events_owner_user_id_user_id_fkey', confdeltype: 'c' },
+      ]);
     } finally {
       await app.end();
       await revoker.end();
