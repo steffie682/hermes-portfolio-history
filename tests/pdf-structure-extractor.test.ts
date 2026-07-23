@@ -58,7 +58,7 @@ describe('PDF structure extractor', () => {
     return { destroy, getOperatorList, loader };
   }
 
-  it('counts mixed text, image, and path paint operators while reading only showText operands', async () => {
+  it('counts mixed text subtypes, image, and path paint operators without reading unrelated operands', async () => {
     const unknownArgs = { get 0() { throw new Error('CANARY_UNKNOWN_ARGS_WAS_READ'); } };
     const operatorList = {
       fnArray: [
@@ -80,12 +80,74 @@ describe('PDF structure extractor', () => {
 
     expect(pages).toEqual([expect.objectContaining({
       extractionMode: 'none', textPaintOperatorCount: 4, imagePaintOperatorCount: 8,
+      showTextOperatorCount: 1, showSpacedTextOperatorCount: 1,
+      nextLineShowTextOperatorCount: 1, nextLineSetSpacingShowTextOperatorCount: 1,
       pathOperatorCount: 2, totalOperatorCount: 15,
     })]);
     expect(JSON.parse(safeJson).pages[0]).toMatchObject({
       textPaintOperatorCount: 4, imagePaintOperatorCount: 8, pathOperatorCount: 2, totalOperatorCount: 15,
+      showTextOperatorCount: 1, showSpacedTextOperatorCount: 1,
+      nextLineShowTextOperatorCount: 1, nextLineSetSpacingShowTextOperatorCount: 1,
     });
     expect(safeJson).not.toContain('CANARY');
+  });
+
+  it('extracts verified glyph arrays from all four text subtypes with line and spacing state', async () => {
+    const glyph = (unicode: string, width = 500, isSpace = false) => ({ unicode, width, isSpace });
+    const raw = 'CANARY_RAW_STRING';
+    const hidden = { get 0() { throw new Error('CANARY_WRONG_ARG_INDEX'); } };
+    const showSpacedArgs = [[raw, 100, glyph('2026年7月18日')]] as unknown[];
+    Object.defineProperty(showSpacedArgs, 1, { get: () => { throw new Error('CANARY_ARGS_1'); } });
+    const nextLineArgs = [[glyph('1,234円')]] as unknown[];
+    Object.defineProperty(nextLineArgs, 1, { get: () => { throw new Error('CANARY_ARGS_1'); } });
+    const spacingArgs = [4, 3, [glyph(' ', 500, true), glyph('秘密名')]] as unknown[];
+    Object.defineProperty(spacingArgs, 3, { get: () => { throw new Error('CANARY_ARGS_3'); } });
+    const fnArray = [
+      OPS.beginText, OPS.setFont, OPS.setLeading, OPS.setTextMatrix,
+      OPS.showText, OPS.showSpacedText, OPS.nextLineShowText, OPS.nextLineSetSpacingShowText,
+      999,
+    ];
+    const argsArray = [
+      [], ['CANARY_FONT', 10], [12], [new Float32Array([1, 0, 0, 1, 10, 50])],
+      [[glyph('分配金額')]], showSpacedArgs, nextLineArgs, spacingArgs, hidden,
+    ];
+    const { loader } = operatorLoader(fnArray, {}, argsArray);
+
+    const normalize = vi.fn((value: string) => value.normalize('NFKC'));
+    const pages = await extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS, normalize);
+    const report = buildSbiIncomeStructureSafeReport(pages);
+    const serialized = JSON.stringify(report);
+
+    expect(pages[0]).toMatchObject({
+      extractionMode: 'operator-glyphs', textPaintOperatorCount: 4,
+      showTextOperatorCount: 1, showSpacedTextOperatorCount: 1,
+      nextLineShowTextOperatorCount: 1, nextLineSetSpacingShowTextOperatorCount: 1,
+      operatorGlyphEntryCount: 7, operatorUnicodeGlyphCount: 5,
+    });
+    expect(pages[0].items).toEqual([
+      expect.objectContaining({ text: '分配金額', x: 10, y: 50, width: 5 }),
+      expect.objectContaining({ text: '2026年7月18日', x: 15, y: 50, width: 4 }),
+      expect.objectContaining({ text: '1,234円', x: 10, y: 38, width: 5 }),
+      expect.objectContaining({ text: ' 秘密名', x: 10, y: 26, width: 20 }),
+    ]);
+    expect(report.pages[0].items.map((item) => item.kind)).toEqual([
+      'known-label', 'date', 'number', 'masked-text',
+    ]);
+    expect(normalize).toHaveBeenCalledTimes(5);
+    for (const canary of ['CANARY', '2026', '1,234', '秘密名']) expect(serialized).not.toContain(canary);
+  });
+
+  it('reports exact showText operators with empty or non-array candidates and zero glyph entries', async () => {
+    const fnArray = Array.from({ length: 24 }, () => OPS.showText);
+    const argsArray = Array.from({ length: 24 }, (_, index) => index % 2 === 0 ? [] : ['not-glyphs']);
+    const { loader } = operatorLoader(fnArray, {}, argsArray);
+    const [page] = await extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS);
+    expect(page).toMatchObject({
+      textPaintOperatorCount: 24, showTextOperatorCount: 24,
+      showSpacedTextOperatorCount: 0, nextLineShowTextOperatorCount: 0,
+      nextLineSetSpacingShowTextOperatorCount: 0, operatorGlyphEntryCount: 0,
+      extractionMode: 'none',
+    });
   });
 
   it('does not read any operands when no allowlisted text/state operator exists', async () => {
@@ -201,27 +263,53 @@ describe('PDF structure extractor', () => {
       .rejects.toThrow('構造が大きすぎます');
   });
 
-  it('accepts exactly 2M unicode characters and fails before a later width getter', async () => {
-    const first = operatorLoader([OPS.showText], {}, [[[{ unicode: 'a'.repeat(2_000_000), width: 0 }]]]);
-    await expect(extractPdfStructure(new Uint8Array([1]), first.loader, undefined, OPS)).resolves.toBeDefined();
-    const lateGlyph = { unicode: 'x', get width() { throw new Error('CANARY_LATE_WIDTH'); } };
-    const second = operatorLoader([OPS.showText, OPS.showText], {}, [
-      [[{ unicode: 'a'.repeat(2_000_000), width: 0 }]], [[lateGlyph]],
-    ]);
-    await expect(extractPdfStructure(new Uint8Array([1]), second.loader, undefined, OPS))
-      .rejects.toThrow('構造が大きすぎます');
-  });
+  it('rejects an exhausted glyph budget before accessing the next text subtype args', async () => {
+    const argsArray = [
+      [Array.from({ length: 20_000 }, () => 10)],
+      [[{ unicode: 'x', width: 0 }]],
+    ] as unknown[];
+    const nextArgs = vi.fn(() => { throw new Error('CANARY_NEXT_SUBTYPE_ARGS'); });
+    Object.defineProperty(argsArray, 1, { get: nextArgs });
+    const { loader } = operatorLoader([OPS.showText, OPS.showSpacedText], {}, argsArray);
 
-  it('fails the normalized text budget before reading width or isSpace', async () => {
-    const later = Object.defineProperties({ unicode: 'x' }, {
-      width: { get: () => { throw new Error('CANARY_LATE_WIDTH'); } },
-      isSpace: { get: () => { throw new Error('CANARY_LATE_SPACE'); } },
-    });
-    const { loader } = operatorLoader([OPS.showText, OPS.showText], {}, [
-      [[{ unicode: 'a'.repeat(2_000_000), width: 0 }]], [[later]],
-    ]);
     await expect(extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS))
       .rejects.toThrow('構造が大きすぎます');
+    expect(nextArgs).not.toHaveBeenCalled();
+  });
+
+  it('rejects an exhausted text budget before accessing the next text subtype args', async () => {
+    const argsArray = [
+      [[{ unicode: 'a'.repeat(2_000_000), width: 0 }]],
+      [[{ unicode: 'x', width: 0 }]],
+    ] as unknown[];
+    const nextArgs = vi.fn(() => { throw new Error('CANARY_NEXT_SUBTYPE_ARGS'); });
+    Object.defineProperty(argsArray, 1, { get: nextArgs });
+    const { loader } = operatorLoader([OPS.showText, OPS.nextLineShowText], {}, argsArray);
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS))
+      .rejects.toThrow('構造が大きすぎます');
+    expect(nextArgs).not.toHaveBeenCalled();
+  });
+
+  it('does not read the next glyph after normalized text exhausts the budget within an array', async () => {
+    const glyphs: unknown[] = [{ unicode: 'a'.repeat(2_000_000), width: 0 }, null];
+    const nextGlyph = vi.fn(() => { throw new Error('CANARY_NEXT_GLYPH'); });
+    Object.defineProperty(glyphs, 1, { get: nextGlyph });
+    const { loader } = operatorLoader([OPS.showText], {}, [[glyphs]]);
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS))
+      .rejects.toThrow('構造が大きすぎます');
+    expect(nextGlyph).not.toHaveBeenCalled();
+  });
+
+  it('accepts the exact text and glyph budgets when no later text operator or glyph exists', async () => {
+    const glyphs = [
+      ...Array.from({ length: 19_999 }, () => 10),
+      { unicode: 'a'.repeat(2_000_000), width: 0 },
+    ];
+    const { loader } = operatorLoader([OPS.showText], {}, [[glyphs]]);
+
+    await expect(extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS)).resolves.toBeDefined();
   });
 
   it('aborts during glyph traversal and destroys once', async () => {
@@ -332,6 +420,21 @@ describe('PDF structure extractor', () => {
     const fnArray = Array.from({ length: 20_001 }, () => OPS.showText);
     const argsArray = Array.from({ length: 20_001 }, () => [[{ unicode: 'x', width: 0 }]]) as unknown[];
     Object.defineProperty(argsArray, 20_000, { get: () => { throw new Error('CANARY_NO_ITEM_SLOT'); } });
+    const { loader } = operatorLoader(fnArray, {}, argsArray);
+    await expect(extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS))
+      .rejects.toThrow('構造が大きすぎます');
+  });
+
+  it.each([
+    OPS.showSpacedText, OPS.nextLineShowText, OPS.nextLineSetSpacingShowText,
+  ])('does not read subtype %s operand after the exact item budget is consumed', async (subtype) => {
+    const fnArray = [...Array.from({ length: 20_000 }, () => OPS.showText), subtype];
+    const argsArray = Array.from(
+      { length: 20_001 }, () => [[{ unicode: 'x', width: 0 }]],
+    ) as unknown[];
+    Object.defineProperty(argsArray, 20_000, {
+      get: () => { throw new Error('CANARY_NO_SUBTYPE_ITEM_SLOT'); },
+    });
     const { loader } = operatorLoader(fnArray, {}, argsArray);
     await expect(extractPdfStructure(new Uint8Array([1]), loader, undefined, OPS))
       .rejects.toThrow('構造が大きすぎます');

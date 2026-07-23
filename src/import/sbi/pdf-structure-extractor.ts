@@ -54,10 +54,9 @@ const MAX_OPERATORS = 200_000;
 const STRUCTURE_TOO_LARGE_ERROR = 'SBI取引残高報告書PDFの構造が大きすぎます';
 
 interface OperatorCodeSets {
-  text: Set<number>;
   image: Set<number>;
   path: Set<number>;
-  showText: number;
+  textSubtype: Record<typeof TEXT_PAINT_OPERATOR_NAMES[number], number>;
   state: Record<PdfTextStateOperatorName, number>;
 }
 
@@ -74,10 +73,10 @@ function operatorCodeSets(mapping: PdfOperatorCodeMapping | undefined): Operator
   }
   if (new Set(codes.values()).size !== codes.size) return null;
   return {
-    text: new Set(TEXT_PAINT_OPERATOR_NAMES.map((name) => codes.get(name)!)),
     image: new Set(IMAGE_PAINT_OPERATOR_NAMES.map((name) => codes.get(name)!)),
     path: new Set(PATH_OPERATOR_NAMES.map((name) => codes.get(name)!)),
-    showText: codes.get('showText')!,
+    textSubtype: Object.fromEntries(TEXT_PAINT_OPERATOR_NAMES.map((name) => [name, codes.get(name)!])) as
+      Record<typeof TEXT_PAINT_OPERATOR_NAMES[number], number>,
     state: Object.fromEntries(TEXT_STATE_OPERATOR_NAMES.map((name) => [name, codes.get(name)!])) as
       Record<PdfTextStateOperatorName, number>,
   };
@@ -149,6 +148,7 @@ function extractOperatorGlyphItems(
   signal: AbortSignal | undefined,
   maxItems: number,
   remainingGlyphs: number,
+  remainingTextCharacters: number,
   onText: (length: number) => void,
   normalizeUnicode: (value: string) => string,
 ): { items: PdfStructurePage['items']; glyphCount: number; unicodeGlyphCount: number;
@@ -158,6 +158,7 @@ function extractOperatorGlyphItems(
   }
   const items: PdfStructurePage['items'] = [];
   let glyphCount = 0;
+  let localNormalizedTextCount = 0;
   let unicodeGlyphCount = 0;
   let fontCharFallbackCount = 0;
   let state: OperatorState = {
@@ -172,18 +173,53 @@ function extractOperatorGlyphItems(
   for (let index = 0; index < fnArray.length; index += 1) {
     signal?.throwIfAborted();
     const code = fnArray[index];
-    if (code === codes.showText) {
+    const textSubtype = codes.textSubtype;
+    if (code === textSubtype.showText || code === textSubtype.showSpacedText
+      || code === textSubtype.nextLineShowText || code === textSubtype.nextLineSetSpacingShowText) {
+      if (remainingGlyphs - glyphCount <= 0
+        || remainingTextCharacters - localNormalizedTextCount <= 0) {
+        throw new Error(STRUCTURE_TOO_LARGE_ERROR);
+      }
       if (items.length >= maxItems) throw new Error(STRUCTURE_TOO_LARGE_ERROR);
       const args = argsArray[index];
-      if (!Array.isArray(args) || !Array.isArray(args[0])) continue;
-      const glyphs = args[0];
+      signal?.throwIfAborted();
+      let glyphCandidate: unknown;
+      if (code === textSubtype.nextLineSetSpacingShowText) {
+        if (!Array.isArray(args)) continue;
+        const wordSpacing = args[0];
+        signal?.throwIfAborted();
+        const charSpacing = args[1];
+        signal?.throwIfAborted();
+        if (!finiteNumber(wordSpacing) || !finiteNumber(charSpacing)) continue;
+        state.wordSpacing = wordSpacing;
+        state.charSpacing = charSpacing;
+        state.lineY = finiteOrZero(state.lineY + state.leading);
+        state.x = state.lineX; state.y = state.lineY;
+        glyphCandidate = args[2];
+        signal?.throwIfAborted();
+      } else {
+        if (code === textSubtype.nextLineShowText) {
+          state.lineY = finiteOrZero(state.lineY + state.leading);
+          state.x = state.lineX; state.y = state.lineY;
+        }
+        if (!Array.isArray(args)) continue;
+        glyphCandidate = args[0];
+        signal?.throwIfAborted();
+      }
+      if (!Array.isArray(glyphCandidate)) continue;
+      const glyphs = glyphCandidate;
       if (glyphs.length > remainingGlyphs - glyphCount) throw new Error(STRUCTURE_TOO_LARGE_ERROR);
       let text = '';
       let advance = 0;
       for (let glyphIndex = 0; glyphIndex < glyphs.length; glyphIndex += 1) {
         signal?.throwIfAborted();
+        if (remainingGlyphs - glyphCount <= 0
+          || remainingTextCharacters - localNormalizedTextCount <= 0) {
+          throw new Error(STRUCTURE_TOO_LARGE_ERROR);
+        }
         glyphCount += 1;
         const glyph = glyphs[glyphIndex];
+        signal?.throwIfAborted();
         if (finiteNumber(glyph)) {
           const spacingAdvance = -glyph * state.fontSize / 1000
             * state.textHScale * state.fontDirection;
@@ -213,6 +249,7 @@ function extractOperatorGlyphItems(
           normalized = value;
           source = 'fontChar';
         }
+        localNormalizedTextCount += normalized.length;
         onText(normalized.length);
         if (source === 'unicode') unicodeGlyphCount += 1;
         else fontCharFallbackCount += 1;
@@ -296,17 +333,33 @@ function countPaintOperators(fnArray: unknown[], codes: OperatorCodeSets, remain
   const totalOperatorCount = fnArray.length;
   if (totalOperatorCount > remaining) throw new Error(STRUCTURE_TOO_LARGE_ERROR);
   let textPaintOperatorCount = 0;
+  let showTextOperatorCount = 0;
+  let showSpacedTextOperatorCount = 0;
+  let nextLineShowTextOperatorCount = 0;
+  let nextLineSetSpacingShowTextOperatorCount = 0;
   let imagePaintOperatorCount = 0;
   let pathOperatorCount = 0;
   for (let index = 0; index < totalOperatorCount; index += 1) {
     const code = fnArray[index];
     if (!Number.isInteger(code) || (code as number) < 0 || (code as number) > MAX_OPERATORS) continue;
-    if (codes.text.has(code as number)) textPaintOperatorCount += 1;
+    if (code === codes.textSubtype.showText) {
+      textPaintOperatorCount += 1; showTextOperatorCount += 1;
+    } else if (code === codes.textSubtype.showSpacedText) {
+      textPaintOperatorCount += 1; showSpacedTextOperatorCount += 1;
+    } else if (code === codes.textSubtype.nextLineShowText) {
+      textPaintOperatorCount += 1; nextLineShowTextOperatorCount += 1;
+    } else if (code === codes.textSubtype.nextLineSetSpacingShowText) {
+      textPaintOperatorCount += 1; nextLineSetSpacingShowTextOperatorCount += 1;
+    }
     else if (codes.image.has(code as number)) imagePaintOperatorCount += 1;
     else if (codes.path.has(code as number)) pathOperatorCount += 1;
   }
   return {
     textPaintOperatorCount,
+    showTextOperatorCount,
+    showSpacedTextOperatorCount,
+    nextLineShowTextOperatorCount,
+    nextLineSetSpacingShowTextOperatorCount,
     imagePaintOperatorCount,
     pathOperatorCount,
     totalOperatorCount,
@@ -615,6 +668,7 @@ export async function extractPdfStructure(
           signal,
           MAX_ITEMS - itemCount,
           MAX_ITEMS - operatorGlyphCount,
+          MAX_TEXT_CHARACTERS - textCharacterCount,
           (length) => {
             textCharacterCount += length;
             if (textCharacterCount > MAX_TEXT_CHARACTERS) throw new Error(STRUCTURE_TOO_LARGE_ERROR);

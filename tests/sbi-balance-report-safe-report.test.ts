@@ -6,16 +6,44 @@ describe('SBI balance report safe structure', () => {
     const report = buildSbiBalanceReportSafeReport([{
       pageNumber: 1, width: 600, height: 320, extractionMode: 'none', items: [],
       textPaintOperatorCount: 4, imagePaintOperatorCount: 8, pathOperatorCount: 2,
+      showTextOperatorCount: 1, showSpacedTextOperatorCount: 1,
+      nextLineShowTextOperatorCount: 1, nextLineSetSpacingShowTextOperatorCount: 1,
       totalOperatorCount: 16, operatorGlyphEntryCount: 9,
       operatorUnicodeGlyphCount: 7, operatorFontCharFallbackCount: 2,
     }]);
 
     expect(report.pages[0]).toMatchObject({
       textPaintOperatorCount: 4, imagePaintOperatorCount: 8,
+      showTextOperatorCount: 1, showSpacedTextOperatorCount: 1,
+      nextLineShowTextOperatorCount: 1, nextLineSetSpacingShowTextOperatorCount: 1,
       pathOperatorCount: 2, totalOperatorCount: 16, operatorGlyphEntryCount: 9,
       operatorUnicodeGlyphCount: 7, operatorFontCharFallbackCount: 2,
     });
     expect(JSON.stringify(report)).not.toContain('undefined');
+  });
+
+  it.each([
+    { showTextOperatorCount: 1 },
+    {
+      showTextOperatorCount: 1, showSpacedTextOperatorCount: 0,
+      nextLineShowTextOperatorCount: 0,
+    },
+    {
+      showTextOperatorCount: 2, showSpacedTextOperatorCount: 0,
+      nextLineShowTextOperatorCount: 0, nextLineSetSpacingShowTextOperatorCount: 0,
+    },
+    {
+      showTextOperatorCount: -1, showSpacedTextOperatorCount: 1,
+      nextLineShowTextOperatorCount: 0, nextLineSetSpacingShowTextOperatorCount: 0,
+    },
+  ])('rejects partial, malformed, or non-summing subtype diagnostics %#', (diagnostics) => {
+    expect(() => buildSbiBalanceReportSafeReport([{
+      pageNumber: 1, width: 600, height: 320, items: [],
+      textPaintOperatorCount: 1, imagePaintOperatorCount: 0, pathOperatorCount: 0,
+      totalOperatorCount: 1, operatorGlyphEntryCount: 0,
+      operatorUnicodeGlyphCount: 0, operatorFontCharFallbackCount: 0,
+      ...diagnostics,
+    }])).toThrow('構造が大きすぎます');
   });
 
   it.each([
@@ -28,6 +56,8 @@ describe('SBI balance report safe structure', () => {
     expect(() => buildSbiBalanceReportSafeReport([{
       pageNumber: 1, width: 600, height: 320, items: [],
       textPaintOperatorCount: 1, imagePaintOperatorCount: 0, pathOperatorCount: 0,
+      showTextOperatorCount: 1, showSpacedTextOperatorCount: 0,
+      nextLineShowTextOperatorCount: 0, nextLineSetSpacingShowTextOperatorCount: 0,
       totalOperatorCount: 1, ...diagnostics,
     }])).toThrow('構造が大きすぎます');
   });
@@ -36,6 +66,8 @@ describe('SBI balance report safe structure', () => {
     expect(() => buildSbiBalanceReportSafeReport([1, 2].map((pageNumber) => ({
       pageNumber, width: 600, height: 320, items: [],
       textPaintOperatorCount: 1, imagePaintOperatorCount: 0, pathOperatorCount: 0,
+      showTextOperatorCount: 1, showSpacedTextOperatorCount: 0,
+      nextLineShowTextOperatorCount: 0, nextLineSetSpacingShowTextOperatorCount: 0,
       totalOperatorCount: 1, operatorGlyphEntryCount: 10_001,
       operatorUnicodeGlyphCount: 0, operatorFontCharFallbackCount: 0,
     })))).toThrow('構造が大きすぎます');
@@ -45,6 +77,8 @@ describe('SBI balance report safe structure', () => {
     expect(() => buildSbiBalanceReportSafeReport([{
       pageNumber: 1, width: 600, height: 320, items: [],
       textPaintOperatorCount: invalid, imagePaintOperatorCount: 0,
+      showTextOperatorCount: 0, showSpacedTextOperatorCount: 0,
+      nextLineShowTextOperatorCount: 0, nextLineSetSpacingShowTextOperatorCount: 0,
       pathOperatorCount: 0, totalOperatorCount: 0,
     }])).toThrow('構造が大きすぎます');
   });

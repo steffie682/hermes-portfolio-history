@@ -14,6 +14,10 @@ export interface PdfStructurePage {
   discardedItemCount?: number;
   extractionMode?: 'text-content' | 'xfa' | 'annotations' | 'operator-glyphs' | 'none';
   textPaintOperatorCount?: number;
+  showTextOperatorCount?: number;
+  showSpacedTextOperatorCount?: number;
+  nextLineShowTextOperatorCount?: number;
+  nextLineSetSpacingShowTextOperatorCount?: number;
   imagePaintOperatorCount?: number;
   pathOperatorCount?: number;
   totalOperatorCount?: number;
@@ -93,6 +97,10 @@ function buildSafeReport<TDocumentKind extends string>(
     if (!valid) throw new Error('SBI取引残高報告書PDFの構造が大きすぎます');
     const operatorValues = [
       page.textPaintOperatorCount,
+      page.showTextOperatorCount,
+      page.showSpacedTextOperatorCount,
+      page.nextLineShowTextOperatorCount,
+      page.nextLineSetSpacingShowTextOperatorCount,
       page.imagePaintOperatorCount,
       page.pathOperatorCount,
       page.totalOperatorCount,
@@ -101,14 +109,18 @@ function buildSafeReport<TDocumentKind extends string>(
       page.operatorFontCharFallbackCount,
     ];
     const hasOperatorDiagnostics = operatorValues.some((value) => value !== undefined);
-    const paintValues = operatorValues.slice(0, 4);
-    const glyphValues = operatorValues.slice(4);
+    const paintValues = operatorValues.slice(0, 8);
+    const glyphValues = operatorValues.slice(8);
     if (hasOperatorDiagnostics && (!paintValues.every((value) => Number.isInteger(value)
       && (value as number) >= 0 && (value as number) <= MAX_OPERATORS)
       || !glyphValues.every((value) => Number.isInteger(value)
         && (value as number) >= 0 && (value as number) <= MAX_OPERATOR_GLYPH_ENTRIES)
       || (page.textPaintOperatorCount as number) + (page.imagePaintOperatorCount as number)
         + (page.pathOperatorCount as number) > (page.totalOperatorCount as number)
+      || (page.showTextOperatorCount as number) + (page.showSpacedTextOperatorCount as number)
+        + (page.nextLineShowTextOperatorCount as number)
+        + (page.nextLineSetSpacingShowTextOperatorCount as number)
+        !== (page.textPaintOperatorCount as number)
       || (page.operatorUnicodeGlyphCount as number) + (page.operatorFontCharFallbackCount as number)
         > (page.operatorGlyphEntryCount as number))) {
       throw new Error('SBI取引残高報告書PDFの構造が大きすぎます');
@@ -118,6 +130,10 @@ function buildSafeReport<TDocumentKind extends string>(
       discardedItemCount,
       ...(hasOperatorDiagnostics ? {
         textPaintOperatorCount: page.textPaintOperatorCount as number,
+        showTextOperatorCount: page.showTextOperatorCount as number,
+        showSpacedTextOperatorCount: page.showSpacedTextOperatorCount as number,
+        nextLineShowTextOperatorCount: page.nextLineShowTextOperatorCount as number,
+        nextLineSetSpacingShowTextOperatorCount: page.nextLineSetSpacingShowTextOperatorCount as number,
         imagePaintOperatorCount: page.imagePaintOperatorCount as number,
         pathOperatorCount: page.pathOperatorCount as number,
         totalOperatorCount: page.totalOperatorCount as number,
