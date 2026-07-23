@@ -35,6 +35,9 @@ function stageFailureMessage(code: string | null) {
 function commitFailureMessage(code: string | null) {
   if (code === 'session_expired') return 'ログイン期限が切れました。再ログインしてから確定してください。';
   if (code === 'invalid_import') return '保存済みの取込が見つかりません。CSVをもう一度保存して確認してください。';
+  if (code === 'distribution_details_required') {
+    return '分配金・再投資の詳細を原本行との対応画面で入力してから確定してください。';
+  }
   return '取込の確定に失敗しました。保存済みの内容は二重計上されないため、もう一度確定できます。';
 }
 

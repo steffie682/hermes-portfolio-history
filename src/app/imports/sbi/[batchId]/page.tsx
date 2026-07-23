@@ -3,6 +3,7 @@ import { notFound, redirect } from 'next/navigation';
 import { resolvePageSessionPrincipal } from '@/auth/page-session';
 import { getImportRuntime } from '@/import/runtime';
 import { importReasonLabel } from '@/import/reason-label';
+import { DistributionDetailsForm } from './distribution-details-form';
 
 export const metadata = {
   title: 'SBI取込の原本追跡',
@@ -17,9 +18,32 @@ function eventDescription(payload: unknown) {
     : {};
   const side = value.side === 'buy' ? '買付' : value.side === 'sell' ? '売却' : '取引';
   const securityName = typeof instrument.securityName === 'string' ? instrument.securityName : '銘柄名なし';
-  const quantity = typeof value.quantity === 'string' ? `数量 ${value.quantity}` : '';
+  const quantity = typeof value.quantity === 'string'
+    ? `数量 ${value.quantity}`
+    : typeof value.quantityIncrease === 'string'
+      ? `再投資数量 ${value.quantityIncrease}`
+      : '';
   const contractDate = typeof value.contractDate === 'string' ? `約定日 ${value.contractDate}` : '';
-  return [side, securityName, quantity, contractDate].filter(Boolean).join(' / ');
+  const quoted = value.sourceQuotedUnitPrice && typeof value.sourceQuotedUnitPrice === 'object'
+    ? value.sourceQuotedUnitPrice as Record<string, unknown>
+    : {};
+  const nav = typeof quoted.value === 'string' ? `CSV単価 ${quoted.value}` : '';
+  const operation = value.operation === 'reinvestment-units' ? '分配金再投資' : side;
+  return [operation, securityName, quantity, nav, contractDate].filter(Boolean).join(' / ');
+}
+
+function isEligibleDistributionRow(row: {
+  status: string;
+  reasonCode: string | null;
+  payload: unknown;
+}) {
+  if (row.status !== 'needs_review' || row.reasonCode !== 'needs-distribution-details'
+    || !row.payload || typeof row.payload !== 'object') return false;
+  const payload = row.payload as Record<string, unknown>;
+  return payload.operation === 'reinvestment-units'
+    && typeof payload.quantityIncrease === 'string'
+    && payload.sourceQuotedUnitPrice !== null
+    && typeof payload.sourceQuotedUnitPrice === 'object';
 }
 
 export default async function ImportTracePage({
@@ -51,6 +75,16 @@ export default async function ImportTracePage({
               <p>{eventDescription(row.payload)}</p>
               <p>判定: {row.status === 'new' ? '新規' : row.status === 'duplicate' ? '重複' : row.status === 'rejected' ? '拒否' : '要確認'}</p>
               {importReasonLabel(row.reasonCode) ? <p>理由: {importReasonLabel(row.reasonCode)}</p> : null}
+              {trace.status === 'preview_ready' && isEligibleDistributionRow(row) ? (
+                <>
+                  <p>PDFはアップロードされません。通知書から入力した値だけが本人専用の取込情報として保存されます。</p>
+                  <p>総分配金と源泉徴収額は未解決のままです。税率や税額は推定しません。</p>
+                  <DistributionDetailsForm
+                    batchId={trace.batchId}
+                    sourceRowNumber={row.sourceRow!}
+                  />
+                </>
+              ) : null}
             </li>
           ))}
         </ol>

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 const routes = [
   'src/app/api/imports/sbi/route.ts',
   'src/app/api/imports/[batchId]/commit/route.ts',
+  'src/app/api/imports/[batchId]/distribution-details/route.ts',
 ];
 
 describe('import route release wiring', () => {

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { toSbiCashTradeEvent } from './sbi/cash-trade-event';
+import { toSbiDistributionReinvestmentEvent } from './sbi/distribution-reinvestment-event';
 import { parseSbiTradeHistory } from './sbi/trade-history';
 
 export const MAX_SBI_SOURCE_BYTES = 10 * 1024 * 1024;
@@ -54,6 +55,23 @@ export function inspectSbiSourceFile(input: {
           eventKind: null,
           reasonCode: 'missing-security-name' as const,
         };
+      }
+      if (row.transactionType === '分配金再投資') {
+        const candidate = toSbiDistributionReinvestmentEvent(row);
+        return candidate.status === 'units-ready'
+          ? {
+              sourceRowNumber: row.sourceRowNumber,
+              status: 'needs_review' as const,
+              eventKind: null,
+              reasonCode: 'needs-distribution-details' as const,
+              payload: candidate.event,
+            }
+          : {
+              sourceRowNumber: row.sourceRowNumber,
+              status: 'needs_review' as const,
+              eventKind: null,
+              reasonCode: candidate.reason,
+            };
       }
       const candidate = toSbiCashTradeEvent(row);
       return candidate.status === 'ready'

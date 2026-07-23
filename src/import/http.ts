@@ -7,6 +7,12 @@ import {
 } from '@/auth/session';
 import type { NextRequest } from 'next/server';
 import { MAX_SBI_SOURCE_BYTES } from './source-file-intake';
+import {
+  MAX_DISTRIBUTION_DETAILS_BYTES,
+  parseDistributionReinvestmentDetails,
+  type DistributionReinvestmentDetails,
+} from './sbi/distribution-reinvestment-details';
+import { CommitBatchError, DistributionResolutionError } from './repository';
 
 interface ImportRepository {
   stageSbiTradeHistory(input: {
@@ -23,6 +29,15 @@ interface ImportRepository {
     principal: AuthenticatedPrincipal;
     batchId: string;
   }): Promise<{ batchId: string; status: 'committed'; committed: number }>;
+  resolveDistributionDetails(input: {
+    principal: AuthenticatedPrincipal;
+    batchId: string;
+    details: DistributionReinvestmentDetails;
+  }): Promise<{
+    batchId: string;
+    sourceRowNumber: number;
+    status: 'new' | 'duplicate';
+  }>;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -36,6 +51,9 @@ type ImportErrorCode =
   | 'invalid_file'
   | 'storage_unavailable'
   | 'invalid_import'
+  | 'detail_mismatch'
+  | 'already_resolved'
+  | 'distribution_details_required'
   | 'commit_unavailable';
 
 function json(body: unknown, status: number) {
@@ -49,12 +67,12 @@ function errorResponse(code: ImportErrorCode, status: number) {
   return json({ error: { code } }, status);
 }
 
-async function readBoundedBody(request: Request) {
+async function readBoundedBody(request: Request, maximumBytes = MAX_SBI_SOURCE_BYTES) {
   const declared = request.headers.get('content-length');
   if (declared !== null) {
     const size = Number(declared);
     if (!Number.isSafeInteger(size) || size < 0) throw new Error('invalid-size');
-    if (size > MAX_SBI_SOURCE_BYTES) throw new Error('too-large');
+    if (size > maximumBytes) throw new Error('too-large');
   }
   if (!request.body) return new Uint8Array();
   const reader = request.body.getReader();
@@ -64,7 +82,7 @@ async function readBoundedBody(request: Request) {
     const { done, value } = await reader.read();
     if (done) break;
     total += value.byteLength;
-    if (total > MAX_SBI_SOURCE_BYTES) {
+    if (total > maximumBytes) {
       await reader.cancel();
       throw new Error('too-large');
     }
@@ -138,10 +156,41 @@ export function createImportHandlers(dependencies: {
       try {
         return json(await dependencies.importRepository.commitBatch({ principal, batchId }), 200);
       } catch (error) {
+        if (error instanceof CommitBatchError
+          && error.code === 'distribution_details_required') {
+          return errorResponse('distribution_details_required', 409);
+        }
         if (error instanceof Error && error.message === 'Import batch is unavailable') {
           return errorResponse('invalid_import', 404);
         }
         return errorResponse('commit_unavailable', 503);
+      }
+    },
+    async resolveDistributionDetails(request: NextRequest, batchId: string) {
+      if (!hasExpectedOrigin(request, dependencies.expectedOrigin)) {
+        return errorResponse('invalid_request', 403);
+      }
+      const principal = await authenticate(request);
+      if (!principal) return errorResponse('session_expired', 401);
+      if (!UUID.test(batchId)) return errorResponse('invalid_request', 400);
+      const mediaType = request.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
+      if (mediaType !== 'application/json') return errorResponse('invalid_request', 415);
+      try {
+        const bytes = await readBoundedBody(request, MAX_DISTRIBUTION_DETAILS_BYTES);
+        const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        const details = parseDistributionReinvestmentDetails(JSON.parse(text));
+        return json(await dependencies.importRepository.resolveDistributionDetails({
+          principal,
+          batchId,
+          details,
+        }), 200);
+      } catch (error) {
+        if (error instanceof DistributionResolutionError) {
+          if (error.code === 'invalid_import') return errorResponse('invalid_import', 404);
+          if (error.code === 'detail_mismatch') return errorResponse('detail_mismatch', 409);
+          return errorResponse('already_resolved', 409);
+        }
+        return errorResponse('invalid_request', 400);
       }
     },
   };

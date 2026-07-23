@@ -97,4 +97,50 @@ describe('source file intake', () => {
     }]);
   });
 
+  it('stages bounded partial evidence for a valid distribution reinvestment row', () => {
+    const row = '2026/07/10,合成投資信託,9999,--,分配金再投資,--,特定,申告,12.3400,"10,500",--,--,2026/07/11,--';
+    const result = inspectSbiSourceFile({
+      mediaType: 'text/csv',
+      bytes: new TextEncoder().encode(`${HEADER}\n${row}`),
+    });
+
+    expect(result.rows).toEqual([{
+      sourceRowNumber: 2,
+      status: 'needs_review',
+      eventKind: null,
+      reasonCode: 'needs-distribution-details',
+      payload: {
+        sourceRowNumber: 2,
+        assetClass: 'fund',
+        operation: 'reinvestment-units',
+        instrument: { securityCode: '9999', securityName: '合成投資信託' },
+        contractDate: '2026-07-10',
+        settlementDate: '2026-07-11',
+        custodyType: '特定',
+        taxationType: '申告',
+        quantityIncrease: '12.34',
+        sourceQuotedUnitPrice: { value: '10500', basis: 'unverified' },
+        cashTreatment: 'unresolved',
+        taxTreatment: 'unresolved',
+        costBasisTreatment: 'unresolved',
+      },
+    }]);
+  });
+
+  it.each([
+    ['quantity', '0', '10500', 'invalid-quantity'],
+    ['unit price', '12.34', '0', 'invalid-unit-price'],
+  ])('keeps invalid distribution %s on its existing reason without a payload', (_name, quantity, price, reasonCode) => {
+    const row = `2026/07/10,合成投資信託,9999,--,分配金再投資,--,特定,申告,${quantity},${price},--,--,2026/07/11,--`;
+    expect(inspectSbiSourceFile({
+      mediaType: 'text/csv',
+      bytes: new TextEncoder().encode(`${HEADER}\n${row}`),
+    }).rows).toEqual([{
+      sourceRowNumber: 2,
+      status: 'needs_review',
+      eventKind: null,
+      reasonCode,
+    }]);
+  });
+
 });

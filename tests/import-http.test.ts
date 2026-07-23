@@ -1,8 +1,10 @@
 import { NextRequest } from 'next/server';
 import { describe, expect, it, vi } from 'vitest';
 import { createImportHandlers } from '@/import/http';
+import { CommitBatchError } from '@/import/repository';
 
 const accountId = '00000000-0000-4000-8000-000000000001';
+const batchId = '10000000-0000-4000-8000-000000000001';
 
 function request(body = new Uint8Array([1, 2, 3]), headers: Record<string, string> = {}) {
   return new NextRequest('https://portfolio.example/api/imports/sbi', {
@@ -19,6 +21,31 @@ function request(body = new Uint8Array([1, 2, 3]), headers: Record<string, strin
 }
 
 describe('import HTTP handlers', () => {
+  it('maps unresolved distribution details to a stable 409 response', async () => {
+    const commitBatch = vi.fn().mockRejectedValue(
+      new CommitBatchError('distribution_details_required'),
+    );
+    const handlers = createImportHandlers({
+      expectedOrigin: 'https://portfolio.example',
+      sessionStore: { findActiveUserByTokenHash: async () => 'user-a' },
+      importRepository: {
+        stageSbiTradeHistory: vi.fn(),
+        commitBatch,
+        resolveDistributionDetails: vi.fn(),
+      },
+    });
+
+    const response = await handlers.commit(request(undefined, {
+      'content-type': 'application/json',
+    }), batchId);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: 'distribution_details_required' },
+    });
+    expect(commitBatch).toHaveBeenCalledOnce();
+  });
+
   it('authenticates and stages a bounded raw CSV request without caching', async () => {
     const stageSbiTradeHistory = vi.fn().mockResolvedValue({
       batchId: 'batch-a',
@@ -28,7 +55,7 @@ describe('import HTTP handlers', () => {
     const handlers = createImportHandlers({
       expectedOrigin: 'https://portfolio.example',
       sessionStore: { findActiveUserByTokenHash: async () => 'user-a' },
-      importRepository: { stageSbiTradeHistory, commitBatch: vi.fn() },
+      importRepository: { stageSbiTradeHistory, commitBatch: vi.fn(), resolveDistributionDetails: vi.fn() },
     });
 
     const response = await handlers.stage(request());
@@ -48,7 +75,7 @@ describe('import HTTP handlers', () => {
     const handlers = createImportHandlers({
       expectedOrigin: 'https://portfolio.example',
       sessionStore: { findActiveUserByTokenHash: async () => 'user-a' },
-      importRepository: { stageSbiTradeHistory, commitBatch: vi.fn() },
+      importRepository: { stageSbiTradeHistory, commitBatch: vi.fn(), resolveDistributionDetails: vi.fn() },
     });
 
     const response = await handlers.stage(request(new Uint8Array([1]), {
@@ -61,7 +88,11 @@ describe('import HTTP handlers', () => {
   });
 
   it('returns stable safe codes for session, media, validation, and storage failures', async () => {
-    const repository = { stageSbiTradeHistory: vi.fn(), commitBatch: vi.fn() };
+    const repository = {
+      stageSbiTradeHistory: vi.fn(),
+      commitBatch: vi.fn(),
+      resolveDistributionDetails: vi.fn(),
+    };
     const unauthenticated = createImportHandlers({
       expectedOrigin: 'https://portfolio.example',
       sessionStore: { findActiveUserByTokenHash: async () => null },
@@ -97,6 +128,128 @@ describe('import HTTP handlers', () => {
     const unavailable = await handlers.stage(request());
     expect(unavailable.status).toBe(503);
     await expect(unavailable.json()).resolves.toEqual({ error: { code: 'storage_unavailable' } });
+  });
+
+  it('authenticates, strictly parses, and resolves bounded distribution details', async () => {
+    const resolveDistributionDetails = vi.fn().mockResolvedValue({
+      batchId,
+      sourceRowNumber: 2,
+      status: 'new',
+    });
+    const handlers = createImportHandlers({
+      expectedOrigin: 'https://portfolio.example',
+      sessionStore: { findActiveUserByTokenHash: async () => 'user-a' },
+      importRepository: {
+        stageSbiTradeHistory: vi.fn(),
+        commitBatch: vi.fn(),
+        resolveDistributionDetails,
+      },
+    });
+    const body = {
+      sourceRowNumber: 2,
+      distributionType: 'ordinary-distribution',
+      reinvestmentDate: '2026-07-11',
+      individualPrincipalPerTenThousand: '10,000.50',
+      reinvestmentAmountYen: '1,234',
+      navPerTenThousand: '10,500',
+      reinvestmentQuantity: '12.340',
+      postReinvestmentBalance: '112.34',
+    };
+    const response = await handlers.resolveDistributionDetails(new NextRequest(
+      `https://portfolio.example/api/imports/${batchId}/distribution-details`,
+      {
+        method: 'POST',
+        headers: {
+          origin: 'https://portfolio.example',
+          cookie: 'portfolio_session=session-token',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      },
+    ), batchId);
+
+    expect(response.status).toBe(200);
+    expect(resolveDistributionDetails).toHaveBeenCalledWith({
+      principal: expect.any(Object),
+      batchId,
+      details: expect.objectContaining({
+        individualPrincipalPerTenThousand: '10000.5',
+        reinvestmentAmountYen: '1234',
+        reinvestmentQuantity: '12.34',
+      }),
+    });
+  });
+
+  it.each([
+    ['cross origin', { origin: 'https://evil.example' }, batchId, '{}', 403, 'invalid_request'],
+    ['wrong content type', { 'content-type': 'text/plain' }, batchId, '{}', 415, 'invalid_request'],
+    ['invalid UUID', {}, 'bad', '{}', 400, 'invalid_request'],
+    ['invalid body', {}, batchId, '{"ownerUserId":"user-b"}', 400, 'invalid_request'],
+  ])('rejects distribution details for %s with a safe response', async (
+    _name, headers, targetBatch, body, status, code,
+  ) => {
+    const resolveDistributionDetails = vi.fn();
+    const handlers = createImportHandlers({
+      expectedOrigin: 'https://portfolio.example',
+      sessionStore: { findActiveUserByTokenHash: async () => 'user-a' },
+      importRepository: {
+        stageSbiTradeHistory: vi.fn(),
+        commitBatch: vi.fn(),
+        resolveDistributionDetails,
+      },
+    });
+    const response = await handlers.resolveDistributionDetails(new NextRequest(
+      `https://portfolio.example/api/imports/${targetBatch}/distribution-details`,
+      {
+        method: 'POST',
+        headers: {
+          origin: 'https://portfolio.example',
+          cookie: 'portfolio_session=session-token',
+          'content-type': 'application/json',
+          ...headers,
+        },
+        body,
+      },
+    ), targetBatch);
+    expect(response.status).toBe(status);
+    await expect(response.json()).resolves.toEqual({ error: { code } });
+    expect(resolveDistributionDetails).not.toHaveBeenCalled();
+  });
+
+  it('rejects a chunked distribution body after crossing 8 KiB', async () => {
+    const resolveDistributionDetails = vi.fn();
+    const handlers = createImportHandlers({
+      expectedOrigin: 'https://portfolio.example',
+      sessionStore: { findActiveUserByTokenHash: async () => 'user-a' },
+      importRepository: {
+        stageSbiTradeHistory: vi.fn(),
+        commitBatch: vi.fn(),
+        resolveDistributionDetails,
+      },
+    });
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(5000));
+        controller.enqueue(new Uint8Array(5000));
+        controller.close();
+      },
+    });
+    const response = await handlers.resolveDistributionDetails(new NextRequest(
+      `https://portfolio.example/api/imports/${batchId}/distribution-details`,
+      {
+        method: 'POST',
+        duplex: 'half',
+        headers: {
+          origin: 'https://portfolio.example',
+          cookie: 'portfolio_session=session-token',
+          'content-type': 'application/json',
+        },
+        body: stream,
+      },
+    ), batchId);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: { code: 'invalid_request' } });
+    expect(resolveDistributionDetails).not.toHaveBeenCalled();
   });
 
 });
