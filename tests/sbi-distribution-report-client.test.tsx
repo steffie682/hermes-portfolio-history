@@ -92,6 +92,94 @@ describe('SBI distribution report client', () => {
     expect(message.textContent).not.toContain('会計インポートは解決');
   });
 
+  it('shows pasted-text fallback only after every automatic page is empty with extraction mode none', async () => {
+    const emptyReport = {
+      ...safeReport,
+      pages: [{
+        pageNumber: 1, width: 600, height: 320, extractionMode: 'none' as const,
+        rawItemCount: 0, discardedItemCount: 0, items: [],
+      }],
+    };
+    const { rerender } = render(
+      <SbiDistributionReportClient inspectPdf={vi.fn().mockResolvedValue(safeReport)} />,
+    );
+    expect(screen.queryByLabelText('Chrome PDFビューアーからコピーしたテキスト')).toBeNull();
+    choose(pdfFile());
+    await screen.findByText('PDF 1ページ');
+    expect(screen.queryByLabelText('Chrome PDFビューアーからコピーしたテキスト')).toBeNull();
+
+    rerender(<SbiDistributionReportClient inspectPdf={vi.fn().mockResolvedValue(emptyReport)} />);
+    choose(pdfFile('empty.pdf'));
+    expect(await screen.findByLabelText('Chrome PDFビューアーからコピーしたテキスト')).toBeTruthy();
+    expect(screen.getByText(/Ctrl\+A|Cmd\+A/).textContent).toContain('ブラウザ内のメモリ');
+    expect(screen.getByText(/Ctrl\+A|Cmd\+A/).textContent).toContain('元のPDFやテキストをここへ送信しない');
+  });
+
+  it('clears raw pasted text after useful success and exposes only safe structure JSON', async () => {
+    const emptyReport = {
+      ...safeReport,
+      pages: [{
+        pageNumber: 1, width: 600, height: 320, extractionMode: 'none' as const,
+        rawItemCount: 0, discardedItemCount: 0, items: [],
+      }],
+    };
+    render(<SbiDistributionReportClient inspectPdf={vi.fn().mockResolvedValue(emptyReport)} />);
+    choose(pdfFile());
+    const textarea = await screen.findByLabelText('Chrome PDFビューアーからコピーしたテキスト') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: '収益分配金\tCANARY_PASTED_SOURCE\t123,456円' } });
+    fireEvent.click(screen.getByRole('button', { name: '貼り付けテキストを安全な構造に変換' }));
+
+    expect(textarea.value).toBe('');
+    expect(screen.getByRole('status').textContent).toContain('構造だけ');
+    const download = screen.getByRole('link', { name: '安全な構造レポートを保存' });
+    expect(decodeURIComponent(download.getAttribute('href') ?? '')).not.toContain('CANARY_PASTED_SOURCE');
+    expect(document.body.textContent).not.toContain('CANARY_PASTED_SOURCE');
+  });
+
+  it('clears raw text on error and invalidates a stale successful artifact before conversion', async () => {
+    const emptyReport = {
+      ...safeReport,
+      pages: [{
+        pageNumber: 1, width: 600, height: 320, extractionMode: 'none' as const,
+        rawItemCount: 0, discardedItemCount: 0, items: [],
+      }],
+    };
+    render(<SbiDistributionReportClient inspectPdf={vi.fn().mockResolvedValue(emptyReport)} />);
+    choose(pdfFile());
+    const textarea = await screen.findByLabelText('Chrome PDFビューアーからコピーしたテキスト') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: '収益分配金' } });
+    fireEvent.click(screen.getByRole('button', { name: '貼り付けテキストを安全な構造に変換' }));
+    expect(screen.getByRole('link', { name: '安全な構造レポートを保存' })).toBeTruthy();
+
+    fireEvent.change(textarea, { target: { value: 'CANARY_BAD\u0000SOURCE' } });
+    fireEvent.click(screen.getByRole('button', { name: '貼り付けテキストを安全な構造に変換' }));
+    expect(textarea.value).toBe('');
+    expect(screen.queryByRole('link', { name: '安全な構造レポートを保存' })).toBeNull();
+    expect(screen.getByRole('alert').textContent).toContain('貼り付けテキストを変換できません');
+    expect(document.body.textContent).not.toContain('CANARY_BAD');
+  });
+
+  it('marks zero-known-label pasted output not useful and does not offer a resolved artifact', async () => {
+    const emptyReport = {
+      ...safeReport,
+      pages: [{
+        pageNumber: 1, width: 600, height: 320, extractionMode: 'none' as const,
+        rawItemCount: 0, discardedItemCount: 0, items: [],
+      }],
+    };
+    render(<SbiDistributionReportClient inspectPdf={vi.fn().mockResolvedValue(emptyReport)} />);
+    choose(pdfFile());
+    const textarea = await screen.findByLabelText('Chrome PDFビューアーからコピーしたテキスト') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'CANARY_UNKNOWN_DOCUMENT' } });
+    fireEvent.click(screen.getByRole('button', { name: '貼り付けテキストを安全な構造に変換' }));
+
+    expect(textarea.value).toBe('');
+    expect(screen.getByRole('alert').textContent).toContain('この結果は利用できません');
+    expect(screen.getByRole('alert').textContent).toContain('書類を確認');
+    expect(screen.queryByRole('link', { name: '安全な構造レポートを保存' })).toBeNull();
+    expect(document.body.textContent).not.toContain('CANARY_UNKNOWN_DOCUMENT');
+  });
+
   it('rejects an oversized file before reading it', async () => {
     const arrayBuffer = vi.fn();
     render(<SbiDistributionReportClient inspectPdf={vi.fn()} />);

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { buildSbiIncomeStructureSafeReport } from '@/import/sbi/balance-report-safe-report';
+import { buildSbiPastedIncomeTextSafeReport } from '@/import/sbi/pasted-income-text-safe-report';
 import { extractPdfStructure, type PdfDocumentLoader } from '@/import/sbi/pdf-structure-extractor';
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -17,8 +18,6 @@ async function inspectPdfInBrowser(source: Uint8Array, signal: AbortSignal): Pro
     source,
     pdfjs.getDocument as unknown as PdfDocumentLoader,
     signal,
-    pdfjs.OPS,
-    pdfjs.normalizeUnicode,
   );
   return buildSbiIncomeStructureSafeReport(pages);
 }
@@ -39,7 +38,9 @@ export default function SbiDistributionReportClient({
 }) {
   const operationVersion = useRef(0);
   const activeInspection = useRef<AbortController | null>(null);
+  const pastedText = useRef<HTMLTextAreaElement | null>(null);
   const [report, setReport] = useState<SafeReport | null>(null);
+  const [showPasteFallback, setShowPasteFallback] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
 
@@ -55,6 +56,7 @@ export default function SbiDistributionReportClient({
     const version = ++operationVersion.current;
     const file = event.currentTarget.files?.[0];
     setReport(null);
+    setShowPasteFallback(false);
     setStatus('');
     setError('');
     if (!file) return;
@@ -71,15 +73,53 @@ export default function SbiDistributionReportClient({
       activeInspection.current = controller;
       const nextReport = await inspectPdf(bytes, controller.signal);
       if (version !== operationVersion.current) return;
-      setReport(nextReport);
-      setStatus(`PDF ${nextReport.pageCount}ページ`);
+      const automaticExtractionEmpty = nextReport.pages.length > 0
+        && nextReport.pages.every((page) => page.extractionMode === 'none' && page.items.length === 0);
+      if (automaticExtractionEmpty) {
+        setReport(null);
+        setShowPasteFallback(true);
+        setStatus('自動抽出ではビューアーのテキストを読み取れませんでした。');
+      } else {
+        setReport(nextReport);
+        setStatus(`PDF ${nextReport.pageCount}ページ`);
+      }
     } catch {
       if (version !== operationVersion.current) return;
       setReport(null);
+      setShowPasteFallback(false);
       setStatus('');
       setError('PDFを確認できませんでした。SBIの分配金・再投資PDFを選び直してください。');
     } finally {
       if (version === operationVersion.current) activeInspection.current = null;
+    }
+  }
+
+  function handlePastedTextConversion() {
+    setReport(null);
+    setStatus('');
+    setError('');
+    const textarea = pastedText.current;
+    if (!textarea) {
+      setError('貼り付けテキストを変換できませんでした。もう一度お試しください。');
+      return;
+    }
+    try {
+      const nextReport = buildSbiPastedIncomeTextSafeReport(textarea.value);
+      const nextItemCount = nextReport.pages.reduce((total, page) => total + page.items.length, 0);
+      const nextKnownLabelCount = nextReport.pages.reduce(
+        (total, page) => total + page.items.filter((item) => item.kind === 'known-label').length,
+        0,
+      );
+      if (nextItemCount === 0 || nextKnownLabelCount === 0) {
+        setError('この結果は利用できません。SBIの分配金・再投資の書類を確認して、もう一度コピーしてください。');
+        return;
+      }
+      setReport(nextReport);
+      setStatus('貼り付けテキストを安全な構造だけに変換しました。会計処理やインポートは完了していません。');
+    } catch {
+      setError('貼り付けテキストを変換できませんでした。内容を確認して、もう一度お試しください。');
+    } finally {
+      textarea.value = '';
     }
   }
 
@@ -107,6 +147,22 @@ export default function SbiDistributionReportClient({
       </div>
       {status ? <p className="import-live-status" role="status">{status}</p> : null}
       {error ? <div className="import-error" role="alert">{error}</div> : null}
+      {showPasteFallback ? (
+        <section className="import-file-panel" aria-labelledby="distribution-paste-fallback-title">
+          <h2 id="distribution-paste-fallback-title">Chrome PDFビューアーからテキストを貼り付ける</h2>
+          <p>
+            自動抽出ではビューアーのテキストを読み取れませんでした。PDFをChrome PDFビューアーで開き、
+            Ctrl+A（MacはCmd+A）ですべて選択してコピーし、下へ貼り付けてください。
+            テキストはブラウザ内のメモリだけで処理し、変換直後に消去します。
+            元のPDFやテキストをここへ送信しないでください。
+          </p>
+          <label htmlFor="sbi-distribution-pasted-text">Chrome PDFビューアーからコピーしたテキスト</label>
+          <textarea id="sbi-distribution-pasted-text" ref={pastedText} />
+          <button type="button" onClick={handlePastedTextConversion}>
+            貼り付けテキストを安全な構造に変換
+          </button>
+        </section>
+      ) : null}
       {report ? (
         <section className="safe-report-result" aria-labelledby="distribution-safe-report-title">
           <h2 id="distribution-safe-report-title">安全な構造レポート</h2>

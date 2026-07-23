@@ -12,7 +12,7 @@ export interface PdfStructurePage {
   height: number;
   rawItemCount?: number;
   discardedItemCount?: number;
-  extractionMode?: 'text-content' | 'xfa' | 'annotations' | 'operator-glyphs' | 'none';
+  extractionMode?: 'text-content' | 'xfa' | 'annotations' | 'operator-glyphs' | 'pasted-text' | 'none';
   textPaintOperatorCount?: number;
   showTextOperatorCount?: number;
   showSpacedTextOperatorCount?: number;
