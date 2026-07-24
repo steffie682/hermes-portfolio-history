@@ -33,6 +33,15 @@ function hasPdfMagic(source: Uint8Array): boolean {
     && source[4] === 0x2d;
 }
 
+function releaseBytes(source: Uint8Array | null) {
+  if (!source) return;
+  try {
+    source.fill(0);
+  } catch {
+    // PDF.js may transfer the ArrayBuffer to its worker, detaching it from this realm.
+  }
+}
+
 export default function SbiBalanceReportClient({
   inspectPdf = inspectPdfInBrowser,
   runOcr = runSbiBrowserOcr,
@@ -58,7 +67,7 @@ export default function SbiBalanceReportClient({
   const [error, setError] = useState('');
 
   function wipeRetainedBytes() {
-    retainedPdfBytes.current?.fill(0);
+    releaseBytes(retainedPdfBytes.current);
     retainedPdfBytes.current = null;
   }
 
@@ -97,7 +106,7 @@ export default function SbiBalanceReportClient({
       bytes = new Uint8Array(await file.arrayBuffer());
       input.value = '';
       if (version !== operationVersion.current) {
-        bytes.fill(0);
+        releaseBytes(bytes);
         bytes = null;
         return;
       }
@@ -110,7 +119,7 @@ export default function SbiBalanceReportClient({
       try {
         nextReport = await inspectPdf(inspectionBytes, controller.signal);
       } finally {
-        inspectionBytes.fill(0);
+        releaseBytes(inspectionBytes);
       }
       if (version !== operationVersion.current) return;
       const needsOcr = nextReport.pages.length > 0
@@ -137,7 +146,7 @@ export default function SbiBalanceReportClient({
       setError('PDFを確認できませんでした。SBIの取引残高報告書PDFを選び直してください。');
     } finally {
       input.value = '';
-      if (bytes && retainedPdfBytes.current !== bytes) bytes.fill(0);
+      if (bytes && retainedPdfBytes.current !== bytes) releaseBytes(bytes);
       if (version === operationVersion.current) activeInspection.current = null;
     }
   }
@@ -188,7 +197,7 @@ export default function SbiBalanceReportClient({
         ? 'OCR結果に既知の見出しがありません。ページ範囲またはPDFを確認してください。'
         : '日本語OCRを完了できませんでした。ページ範囲またはPDFを確認してください。');
     } finally {
-      ocrBytes.fill(0);
+      releaseBytes(ocrBytes);
       if (retainedPdfBytes.current === ocrBytes) retainedPdfBytes.current = null;
       if (version === operationVersion.current) {
         activeInspection.current = null;

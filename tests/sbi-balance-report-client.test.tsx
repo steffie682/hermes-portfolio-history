@@ -141,6 +141,19 @@ describe('SBI balance report client', () => {
     pending.resolve(safeReport);
   });
 
+  it('offers OCR after PDF.js transfers the inspection buffer to its worker', async () => {
+    const inspectPdf = vi.fn(async (source: Uint8Array) => {
+      structuredClone(source.buffer, { transfer: [source.buffer] });
+      expect(source.byteLength).toBe(0);
+      return emptyReport;
+    });
+    render(<SbiBalanceReportClient inspectPdf={inspectPdf} />);
+    choose(pdfFile());
+
+    expect(await screen.findByRole('heading', { name: '端末内の日本語OCR' })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('offers bounded on-device Japanese OCR instead of an empty diagnostic download', async () => {
     render(<SbiBalanceReportClient inspectPdf={vi.fn().mockResolvedValue(emptyReport)} />);
     choose(pdfFile());
