@@ -1,9 +1,14 @@
 'use client';
 
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import Link from 'next/link';
 import { buildSbiBalanceReportSafeReport } from '@/import/sbi/balance-report-safe-report';
 import { runSbiBrowserOcr, validateOcrPageRange } from '@/import/sbi/browser-ocr';
 import { extractPdfStructure, type PdfDocumentLoader } from '@/import/sbi/pdf-structure-extractor';
+import BalanceReportPositionForm, {
+  type BalanceReportAccountSummary,
+  type SavedSnapshotSummary,
+} from './balance-report-position-form';
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 type SafeReport = ReturnType<typeof buildSbiBalanceReportSafeReport>;
@@ -43,9 +48,13 @@ function releaseBytes(source: Uint8Array | null) {
 }
 
 export default function SbiBalanceReportClient({
+  accounts = [],
+  recentSnapshots = [],
   inspectPdf = inspectPdfInBrowser,
   runOcr = runSbiBrowserOcr,
 }: {
+  accounts?: BalanceReportAccountSummary[];
+  recentSnapshots?: SavedSnapshotSummary[];
   inspectPdf?: (source: Uint8Array, signal: AbortSignal) => Promise<SafeReport>;
   runOcr?: (
     source: Uint8Array,
@@ -229,6 +238,21 @@ export default function SbiBalanceReportClient({
 
   return (
     <>
+      {accounts.length === 0 ? (
+        <p><Link href="/imports/sbi">SBI口座を作成してから続ける</Link></p>
+      ) : null}
+      {recentSnapshots.length > 0 ? (
+        <section aria-labelledby="recent-balance-snapshots">
+          <h2 id="recent-balance-snapshots">最近保存した残高報告書</h2>
+          <ul>
+            {recentSnapshots.map((snapshot) => (
+              <li key={snapshot.id}>
+                {snapshot.statementDate}・{snapshot.positionCount}件
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <div className="import-file-panel">
         <label htmlFor="sbi-balance-report-pdf">SBI取引残高報告書PDF</label>
         <input id="sbi-balance-report-pdf" type="file" accept=".pdf,application/pdf" onChange={handleFileChange} />
@@ -282,6 +306,8 @@ export default function SbiBalanceReportClient({
         </section>
       ) : null}
       {report ? (
+        <>
+        {accounts.length > 0 ? <BalanceReportPositionForm accounts={accounts} /> : null}
         <section className="safe-report-result" aria-labelledby="safe-report-title">
           <h2 id="safe-report-title">安全な構造レポート</h2>
           <p>検出できた既知の見出し</p>
@@ -295,12 +321,13 @@ export default function SbiBalanceReportClient({
             download="sbi-balance-report-safe-structure.json"
             href={reportHref}
           >
-            安全な構造レポートを保存
+            診断用JSONを保存（任意）
           </a>
           <p className="preview-note">
             このJSONは帳票形式の診断用です。元PDFや取引値の代替ではなく、JSONだけを共有できます。
           </p>
         </section>
+        </>
       ) : null}
     </>
   );
