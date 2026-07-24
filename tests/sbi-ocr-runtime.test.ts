@@ -1,9 +1,36 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createControlledWorkerController,
+  restoreWorkerConstructor,
   runSbiBrowserOcr,
   validateOcrPageRange,
   type BrowserOcrDependencies,
 } from '@/import/sbi/browser-ocr';
+
+const createMockWorkerController: BrowserOcrDependencies['createWorkerController'] = (
+  tesseract,
+  language,
+  engine,
+  options,
+) => {
+  let worker: Awaited<ReturnType<typeof tesseract.createWorker>> | null = null;
+  let terminationRequested = false;
+  let terminatePromise: Promise<unknown> | null = null;
+  const ready = tesseract.createWorker(language, engine, options).then((createdWorker) => {
+    worker = createdWorker;
+    if (terminationRequested) void createdWorker.terminate().catch(() => undefined);
+    return createdWorker;
+  });
+  return {
+    ready,
+    terminate() {
+      terminationRequested = true;
+      if (!worker) return Promise.resolve();
+      terminatePromise ??= worker.terminate();
+      return terminatePromise;
+    },
+  };
+};
 
 describe('SBI browser OCR range', () => {
   it.each([
@@ -28,6 +55,124 @@ describe('SBI browser OCR range', () => {
 });
 
 describe('SBI browser OCR resources', () => {
+  it('fails closed when a temporary Worker property cannot be removed', () => {
+    class OriginalWorker {}
+    class TemporaryWorker {}
+    const workerGlobal = Object.create({ Worker: OriginalWorker }) as { Worker: typeof Worker };
+    Object.defineProperty(workerGlobal, 'Worker', {
+      configurable: false,
+      value: TemporaryWorker,
+    });
+
+    expect(() => restoreWorkerConstructor(
+      workerGlobal,
+      undefined,
+      OriginalWorker as unknown as typeof Worker,
+    )).toThrow('ocr-worker-control-unavailable');
+  });
+
+  it('controls the native worker before Tesseract initialization is ready', async () => {
+    const nativeTerminate = vi.fn();
+    class FakeWorker {
+      terminate = nativeTerminate;
+    }
+    vi.stubGlobal('Worker', FakeWorker);
+    try {
+      const ready = new Promise<never>(() => undefined);
+      const createWorker = vi.fn((_language, _engine, options: Record<string, unknown>) => {
+        const WorkerConstructor = globalThis.Worker;
+        new WorkerConstructor(String(options.workerPath));
+        return ready;
+      });
+      const originalWorker = globalThis.Worker;
+      const controller = createControlledWorkerController(
+        { createWorker, OEM: { LSTM_ONLY: 1 } },
+        'jpn',
+        1,
+        { workerPath: `${location.origin}/ocr/worker.min.js` },
+      );
+
+      expect(globalThis.Worker).toBe(originalWorker);
+      expect(createWorker).toHaveBeenCalledWith('jpn', 1, {
+        workerPath: `${location.origin}/ocr/worker.min.js`,
+        errorHandler: expect.any(Function),
+      });
+      await controller.terminate();
+      await controller.terminate();
+      expect(nativeTerminate).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('terminates every captured worker when one native termination throws', async () => {
+    const firstTerminate = vi.fn(() => { throw new Error('native-terminate-failed'); });
+    const secondTerminate = vi.fn();
+    let workerIndex = 0;
+    class FakeWorker {
+      private readonly index = workerIndex++;
+
+      terminate() {
+        if (this.index === 0) firstTerminate();
+        else secondTerminate();
+      }
+    }
+    vi.stubGlobal('Worker', FakeWorker);
+    try {
+      const createWorker = vi.fn(() => {
+        new globalThis.Worker('/ocr/worker.min.js');
+        new globalThis.Worker('/ocr/worker.min.js');
+        return new Promise<never>(() => undefined);
+      });
+
+      expect(() => createControlledWorkerController(
+        { createWorker, OEM: { LSTM_ONLY: 1 } },
+        'jpn',
+        1,
+        { workerPath: `${location.origin}/ocr/worker.min.js` },
+      )).toThrow('ocr-worker-control-unavailable');
+
+      await vi.waitFor(() => expect(firstTerminate).toHaveBeenCalledOnce());
+      expect(secondTerminate).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('rejects controlled initialization when Tesseract reports a language-load error', async () => {
+    const nativeTerminate = vi.fn();
+    class FakeWorker {
+      terminate = nativeTerminate;
+    }
+    vi.stubGlobal('Worker', FakeWorker);
+    try {
+      let errorHandler!: (error: unknown) => void;
+      const createWorker = vi.fn((_language, _engine, options: Record<string, unknown>) => {
+        errorHandler = options.errorHandler as (error: unknown) => void;
+        new globalThis.Worker(String(options.workerPath));
+        return new Promise<never>(() => undefined);
+      });
+      const controller = createControlledWorkerController(
+        { createWorker, OEM: { LSTM_ONLY: 1 } },
+        'jpn',
+        1,
+        { workerPath: `${location.origin}/ocr/worker.min.js` },
+      );
+
+      errorHandler(new Error('language-load-failed'));
+
+      await expect(Promise.race([
+        controller.ready,
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('initialization-error-not-prompt')), 100);
+        }),
+      ])).rejects.toThrow('ocr-worker-initialization-failed');
+      expect(nativeTerminate).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('rejects promptly on abort and terminates a worker that initializes late exactly once', async () => {
     const controller = new AbortController();
     const destroy = vi.fn().mockResolvedValue(undefined);
@@ -55,6 +200,7 @@ describe('SBI browser OCR resources', () => {
         createWorker,
         OEM: { LSTM_ONLY: 1 },
       }),
+      createWorkerController: createMockWorkerController,
       createCanvas: () => document.createElement('canvas'),
     };
     const pending = runSbiBrowserOcr(
@@ -76,6 +222,51 @@ describe('SBI browser OCR resources', () => {
 
     resolveWorker({ recognize: vi.fn(), terminate });
     await vi.waitFor(() => expect(terminate).toHaveBeenCalledOnce());
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('terminates a controlled worker when initialization never settles', async () => {
+    const controller = new AbortController();
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const terminateInitialization = vi.fn().mockResolvedValue(undefined);
+    const createWorkerController = vi.fn().mockReturnValue({
+      ready: new Promise(() => undefined),
+      terminate: terminateInitialization,
+    });
+    const dependencies: BrowserOcrDependencies = {
+      loadPdfJs: vi.fn().mockResolvedValue({
+        GlobalWorkerOptions: { workerSrc: `${location.origin}/pdf.worker.min.mjs` },
+        getDocument: vi.fn().mockReturnValue({
+          promise: Promise.resolve({ numPages: 1, getPage: vi.fn() }),
+          destroy,
+        }),
+      }),
+      loadTesseract: vi.fn().mockResolvedValue({
+        createWorker: vi.fn().mockReturnValue(new Promise(() => undefined)),
+        OEM: { LSTM_ONLY: 1 },
+      }),
+      createWorkerController,
+      createCanvas: () => document.createElement('canvas'),
+    };
+    const pending = runSbiBrowserOcr(
+      new Uint8Array([37, 80, 68, 70, 45]),
+      { startPage: 1, endPage: 1 },
+      controller.signal,
+      vi.fn(),
+      dependencies,
+    );
+    await vi.waitFor(() => expect(dependencies.loadTesseract).toHaveBeenCalledOnce());
+
+    controller.abort();
+    await expect(Promise.race([
+      pending,
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('abort-not-prompt')), 100);
+      }),
+    ])).rejects.toMatchObject({ name: 'AbortError' });
+
+    expect(createWorkerController).toHaveBeenCalledOnce();
+    expect(terminateInitialization).toHaveBeenCalledOnce();
     expect(destroy).toHaveBeenCalledOnce();
   });
 
@@ -108,6 +299,7 @@ describe('SBI browser OCR resources', () => {
         createWorker,
         OEM: { LSTM_ONLY: 1 },
       }),
+      createWorkerController: createMockWorkerController,
       createCanvas: () => canvas,
     };
 
@@ -164,6 +356,7 @@ describe('SBI browser OCR resources', () => {
         createWorker: vi.fn().mockResolvedValue({ recognize: vi.fn(), terminate }),
         OEM: { LSTM_ONLY: 1 },
       }),
+      createWorkerController: createMockWorkerController,
       createCanvas: () => {
         const canvas = document.createElement('canvas');
         canvas.getContext = vi.fn().mockReturnValue({});
@@ -215,6 +408,7 @@ describe('SBI browser OCR resources', () => {
         createWorker: vi.fn().mockResolvedValue({ recognize, terminate }),
         OEM: { LSTM_ONLY: 1 },
       }),
+      createWorkerController: createMockWorkerController,
       createCanvas: () => canvas,
     };
     const pending = runSbiBrowserOcr(
@@ -234,6 +428,59 @@ describe('SBI browser OCR resources', () => {
     expect(canvas.height).toBe(0);
   });
 
+  it('clears raw OCR text when recognition resolves after abort', async () => {
+    const controller = new AbortController();
+    const lateResult = { data: { text: '取引残高報告書 LATE-OCR-TEXT' } };
+    let resolveRecognition!: (result: typeof lateResult) => void;
+    const recognitionPromise = new Promise<typeof lateResult>((resolve) => {
+      resolveRecognition = resolve;
+    });
+    const recognize = vi.fn().mockReturnValue(recognitionPromise);
+    const canvas = document.createElement('canvas');
+    canvas.getContext = vi.fn().mockReturnValue({});
+    const dependencies: BrowserOcrDependencies = {
+      loadPdfJs: vi.fn().mockResolvedValue({
+        GlobalWorkerOptions: { workerSrc: `${location.origin}/pdf.worker.min.mjs` },
+        getDocument: vi.fn().mockReturnValue({
+          promise: Promise.resolve({
+            numPages: 1,
+            getPage: vi.fn().mockResolvedValue({
+              getViewport: vi.fn(({ scale }: { scale: number }) => ({
+                width: 600 * scale, height: 800 * scale,
+              })),
+              render: vi.fn().mockReturnValue({ promise: Promise.resolve(), cancel: vi.fn() }),
+              cleanup: vi.fn(),
+            }),
+          }),
+          destroy: vi.fn().mockResolvedValue(undefined),
+        }),
+      }),
+      loadTesseract: vi.fn().mockResolvedValue({
+        createWorker: vi.fn().mockResolvedValue({
+          recognize,
+          terminate: vi.fn().mockResolvedValue(undefined),
+        }),
+        OEM: { LSTM_ONLY: 1 },
+      }),
+      createWorkerController: createMockWorkerController,
+      createCanvas: () => canvas,
+    };
+    const pending = runSbiBrowserOcr(
+      new Uint8Array([37, 80, 68, 70, 45]),
+      { startPage: 1, endPage: 1 },
+      controller.signal,
+      vi.fn(),
+      dependencies,
+    );
+    await vi.waitFor(() => expect(recognize).toHaveBeenCalledOnce());
+
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    resolveRecognition(lateResult);
+
+    await vi.waitFor(() => expect(lateResult.data.text).toBe(''));
+  });
+
   it('fails closed before worker creation for invalid runtime origins', async () => {
     const createWorker = vi.fn();
     const dependencies: BrowserOcrDependencies = {
@@ -245,6 +492,7 @@ describe('SBI browser OCR resources', () => {
         createWorker,
         OEM: { LSTM_ONLY: 1 },
       }),
+      createWorkerController: createMockWorkerController,
       createCanvas: () => document.createElement('canvas'),
     };
     await expect(runSbiBrowserOcr(
@@ -279,6 +527,7 @@ describe('SBI browser OCR resources', () => {
         createWorker: vi.fn().mockResolvedValue({ recognize: vi.fn(), terminate }),
         OEM: { LSTM_ONLY: 1 },
       }),
+      createWorkerController: createMockWorkerController,
       createCanvas: () => document.createElement('canvas'),
     };
     await expect(runSbiBrowserOcr(
@@ -322,6 +571,7 @@ describe('SBI browser OCR resources', () => {
         }),
         OEM: { LSTM_ONLY: 1 },
       }),
+      createWorkerController: createMockWorkerController,
       createCanvas: () => {
         const canvas = document.createElement('canvas');
         canvas.getContext = vi.fn().mockReturnValue({});
@@ -337,6 +587,55 @@ describe('SBI browser OCR resources', () => {
     )).rejects.toThrow('ocr-page-size-invalid');
     expect(destroy).toHaveBeenCalledOnce();
     expect(terminate).toHaveBeenCalledOnce();
+  });
+
+  it('continues final cleanup when page cleanup throws', async () => {
+    const cleanupError = new Error('page-cleanup-failed');
+    const cleanupPage = vi.fn(() => { throw cleanupError; });
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    const canvas = document.createElement('canvas');
+    canvas.getContext = vi.fn().mockReturnValue({});
+    const dependencies: BrowserOcrDependencies = {
+      loadPdfJs: vi.fn().mockResolvedValue({
+        GlobalWorkerOptions: { workerSrc: `${location.origin}/pdf.worker.min.mjs` },
+        getDocument: vi.fn().mockReturnValue({
+          promise: Promise.resolve({
+            numPages: 1,
+            getPage: vi.fn().mockResolvedValue({
+              getViewport: vi.fn(({ scale }: { scale: number }) => ({
+                width: 600 * scale, height: 800 * scale,
+              })),
+              render: vi.fn().mockReturnValue({ promise: Promise.resolve(), cancel: vi.fn() }),
+              cleanup: cleanupPage,
+            }),
+          }),
+          destroy,
+        }),
+      }),
+      loadTesseract: vi.fn().mockResolvedValue({
+        createWorker: vi.fn().mockResolvedValue({
+          recognize: vi.fn().mockResolvedValue({ data: { text: '取引残高報告書' } }),
+          terminate,
+        }),
+        OEM: { LSTM_ONLY: 1 },
+      }),
+      createWorkerController: createMockWorkerController,
+      createCanvas: () => canvas,
+    };
+
+    await expect(runSbiBrowserOcr(
+      new Uint8Array([37, 80, 68, 70, 45]),
+      { startPage: 1, endPage: 1 },
+      new AbortController().signal,
+      vi.fn(),
+      dependencies,
+    )).rejects.toBe(cleanupError);
+
+    expect(terminate).toHaveBeenCalledOnce();
+    expect(destroy).toHaveBeenCalledOnce();
+    expect(canvas.width).toBe(0);
+    expect(canvas.height).toBe(0);
   });
 
   it('does not let detached-byte cleanup mask the primary PDF error', async () => {
@@ -357,6 +656,7 @@ describe('SBI browser OCR resources', () => {
         }),
       }),
       loadTesseract: vi.fn(),
+      createWorkerController: createMockWorkerController,
       createCanvas: () => document.createElement('canvas'),
     };
     await expect(runSbiBrowserOcr(
@@ -395,6 +695,7 @@ describe('SBI browser OCR resources', () => {
         }),
         OEM: { LSTM_ONLY: 1 },
       }),
+      createWorkerController: createMockWorkerController,
       createCanvas: () => {
         const canvas = document.createElement('canvas');
         canvas.getContext = vi.fn().mockReturnValue({});

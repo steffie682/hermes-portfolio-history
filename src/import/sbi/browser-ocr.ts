@@ -29,20 +29,134 @@ interface OcrWorker {
   terminate(): Promise<unknown>;
 }
 
+interface TesseractRuntime {
+  createWorker(
+    language: string,
+    engine: number,
+    options: Record<string, unknown>,
+  ): Promise<OcrWorker>;
+  OEM: { LSTM_ONLY: number };
+}
+
+export interface OcrWorkerController {
+  ready: Promise<OcrWorker>;
+  terminate(): Promise<unknown>;
+}
+
 export interface BrowserOcrDependencies {
   loadPdfJs(): Promise<{
     GlobalWorkerOptions: { workerSrc: string };
     getDocument(options: Record<string, unknown>): PdfLoadingTask;
   }>;
-  loadTesseract(): Promise<{
-    createWorker(
-      language: string,
-      engine: number,
-      options: Record<string, unknown>,
-    ): Promise<OcrWorker>;
-    OEM: { LSTM_ONLY: number };
-  }>;
+  loadTesseract(): Promise<TesseractRuntime>;
+  createWorkerController(
+    tesseract: TesseractRuntime,
+    language: string,
+    engine: number,
+    options: Record<string, unknown>,
+  ): OcrWorkerController;
   createCanvas(): HTMLCanvasElement;
+}
+
+export function restoreWorkerConstructor(
+  workerGlobal: { Worker: typeof Worker },
+  originalDescriptor: PropertyDescriptor | undefined,
+  expectedWorker: typeof Worker,
+) {
+  try {
+    if (originalDescriptor) {
+      Object.defineProperty(workerGlobal, 'Worker', originalDescriptor);
+    } else if (!Reflect.deleteProperty(workerGlobal, 'Worker')) {
+      throw new Error('worker-delete-failed');
+    }
+    if (workerGlobal.Worker !== expectedWorker) throw new Error('worker-restore-mismatch');
+  } catch {
+    throw new Error('ocr-worker-control-unavailable');
+  }
+}
+
+export function createControlledWorkerController(
+  tesseract: TesseractRuntime,
+  language: string,
+  engine: number,
+  options: Record<string, unknown>,
+): OcrWorkerController {
+  const NativeWorker = globalThis.Worker;
+  if (typeof NativeWorker !== 'function') throw new Error('ocr-worker-control-unavailable');
+
+  const capturedWorkers: Worker[] = [];
+  const terminatedWorkers = new Set<Worker>();
+  let terminationRequested = false;
+  let terminationTail: Promise<void> = Promise.resolve();
+  const terminate = () => {
+    terminationRequested = true;
+    const batch = capturedWorkers.filter((worker) => !terminatedWorkers.has(worker));
+    batch.forEach((worker) => terminatedWorkers.add(worker));
+    if (batch.length === 0) return terminationTail;
+    const batchTermination = Promise.all(batch.map(async (nativeWorker) => {
+      try {
+        await nativeWorker.terminate();
+      } catch {
+        // One broken worker must not prevent the remaining workers from terminating.
+      }
+    })).then(() => undefined);
+    terminationTail = Promise.all([terminationTail, batchTermination]).then(() => undefined);
+    return terminationTail;
+  };
+  const CapturingWorker = new Proxy(NativeWorker, {
+    construct(target, args) {
+      const nativeWorker = Reflect.construct(target, args, target) as Worker;
+      capturedWorkers.push(nativeWorker);
+      return nativeWorker;
+    },
+  });
+  const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'Worker');
+
+  let rejectInitialization!: (error: Error) => void;
+  const initializationFailure = new Promise<OcrWorker>((_resolve, reject) => {
+    rejectInitialization = reject;
+  });
+  void initializationFailure.catch(() => undefined);
+  let upstreamReady!: Promise<OcrWorker>;
+  let ready!: Promise<OcrWorker>;
+  try {
+    Object.defineProperty(globalThis, 'Worker', {
+      configurable: true,
+      writable: true,
+      value: CapturingWorker,
+    });
+    upstreamReady = tesseract.createWorker(language, engine, {
+      ...options,
+      errorHandler: () => {
+        rejectInitialization(new Error('ocr-worker-initialization-failed'));
+        void terminate();
+      },
+    });
+    void upstreamReady.catch(() => undefined);
+    ready = Promise.race([upstreamReady, initializationFailure]);
+    void ready.catch(() => terminate());
+    if (terminationRequested) void terminate();
+  } catch (error) {
+    void terminate();
+    throw error;
+  } finally {
+    try {
+      restoreWorkerConstructor(globalThis, originalDescriptor, NativeWorker);
+    } catch {
+      void terminate();
+      throw new Error('ocr-worker-control-unavailable');
+    }
+  }
+
+  if (capturedWorkers.length !== 1) {
+    void terminate();
+    void upstreamReady.then(
+      (lateWorker) => terminateLateWorker(lateWorker),
+      () => undefined,
+    );
+    throw new Error('ocr-worker-control-unavailable');
+  }
+  return { ready, terminate };
 }
 
 const defaultDependencies: BrowserOcrDependencies = {
@@ -59,6 +173,7 @@ const defaultDependencies: BrowserOcrDependencies = {
       BrowserOcrDependencies['loadTesseract']
     >;
   },
+  createWorkerController: createControlledWorkerController,
   createCanvas() {
     return document.createElement('canvas');
   },
@@ -132,6 +247,31 @@ function cleanupLatePage(page: PdfPage) {
   }
 }
 
+function runCleanup(operation: () => unknown): Promise<void> {
+  try {
+    return Promise.resolve(operation()).then(
+      () => undefined,
+      () => undefined,
+    );
+  } catch {
+    return Promise.resolve();
+  }
+}
+
+function clearCanvas(canvas: HTMLCanvasElement | null) {
+  if (!canvas) return;
+  try {
+    canvas.width = 0;
+  } catch {
+    // Continue releasing the remaining resources.
+  }
+  try {
+    canvas.height = 0;
+  } catch {
+    // Continue releasing the remaining resources.
+  }
+}
+
 export async function runSbiBrowserOcr(
   source: Uint8Array,
   range: { startPage: number; endPage: number },
@@ -157,6 +297,7 @@ export async function runSbiBrowserOcr(
     verbosity: 0,
   });
   let worker: OcrWorker | null = null;
+  let workerController: OcrWorkerController | null = null;
   let terminatePromise: Promise<unknown> | null = null;
   let destroyPromise: Promise<void> | null = null;
   let renderTask: ReturnType<PdfPage['render']> | null = null;
@@ -166,8 +307,8 @@ export async function runSbiBrowserOcr(
   let renderedPixels = 0;
   let completed = false;
   const terminateWorker = () => {
-    if (!worker) return Promise.resolve();
-    terminatePromise ??= worker.terminate();
+    if (!workerController) return Promise.resolve();
+    terminatePromise ??= workerController.terminate();
     return terminatePromise;
   };
   const destroyPdf = () => {
@@ -177,32 +318,29 @@ export async function runSbiBrowserOcr(
   const onAbort = () => {
     const task = renderTask;
     renderTask = null;
-    task?.cancel();
-    void terminateWorker();
-    void destroyPdf();
+    if (task) void runCleanup(() => task.cancel());
+    void runCleanup(terminateWorker);
+    void runCleanup(destroyPdf);
   };
   signal.addEventListener('abort', onAbort, { once: true });
   try {
     const pdf = await raceAbort(loadingTask.promise, signal);
     validateOcrPageRange(range.startPage, range.endPage, pdf.numPages);
     const tesseract = await raceAbort(dependencies.loadTesseract(), signal);
-    const workerPromise = tesseract.createWorker('jpn', tesseract.OEM.LSTM_ONLY, {
-      workerPath,
-      corePath,
-      langPath,
-      workerBlobURL: false,
-      cacheMethod: 'none',
-      gzip: true,
-    });
-    let workerAcquired = false;
-    void workerPromise.then(
-      (lateWorker) => {
-        if (!workerAcquired && signal.aborted) terminateLateWorker(lateWorker);
+    workerController = dependencies.createWorkerController(
+      tesseract,
+      'jpn',
+      tesseract.OEM.LSTM_ONLY,
+      {
+        workerPath,
+        corePath,
+        langPath,
+        workerBlobURL: false,
+        cacheMethod: 'none',
+        gzip: true,
       },
-      () => undefined,
     );
-    worker = await raceAbort(workerPromise, signal);
-    workerAcquired = true;
+    worker = await raceAbort(workerController.ready, signal);
     const total = range.endPage - range.startPage + 1;
     for (let pageNumber = range.startPage; pageNumber <= range.endPage; pageNumber += 1) {
       signal.throwIfAborted();
@@ -249,9 +387,16 @@ export async function runSbiBrowserOcr(
       await raceAbort(renderTask.promise, signal);
       renderTask = null;
       signal.throwIfAborted();
-      const result = await raceAbort(worker.recognize(canvas), signal);
-      signal.throwIfAborted();
+      const recognitionPromise = worker.recognize(canvas);
+      void recognitionPromise.then(
+        (lateResult) => {
+          if (signal.aborted) lateResult.data.text = '';
+        },
+        () => undefined,
+      );
+      const result = await raceAbort(recognitionPromise, signal);
       try {
+        signal.throwIfAborted();
         safeReport.addPage({
           pageNumber,
           width: baseViewport.width,
@@ -278,14 +423,15 @@ export async function runSbiBrowserOcr(
     signal.removeEventListener('abort', onAbort);
     const task = renderTask;
     renderTask = null;
-    task?.cancel();
-    if (canvas) {
-      canvas.width = 0;
-      canvas.height = 0;
-    }
-    page?.cleanup();
+    if (task) await runCleanup(() => task.cancel());
+    clearCanvas(canvas);
+    const remainingPage = page;
+    if (remainingPage) await runCleanup(() => remainingPage.cleanup());
     if (!completed) safeReport.safePages.length = 0;
-    await Promise.allSettled([terminateWorker(), destroyPdf()]);
+    await Promise.all([
+      runCleanup(terminateWorker),
+      runCleanup(destroyPdf),
+    ]);
     releaseBytes(pdfSource);
   }
 }
