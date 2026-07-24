@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "node scripts/prepare-ocr-assets.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/prepare-ocr-assets.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
@@ -17,6 +19,7 @@
   "dependencies": {
     "@simplewebauthn/browser": "13.3.0",
     "@simplewebauthn/server": "13.3.2",
+    "@tesseract.js-data/jpn": "1.0.0",
     "@vercel/blob": "2.6.1",
     "drizzle-orm": "1.0.0-rc.4",
     "next": "16.3.0-canary.93",
@@ -24,7 +27,9 @@
     "postgres": "3.4.9",
     "qrcode.react": "4.2.0",
     "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "react-dom": "19.2.7",
+    "tesseract.js": "7.0.0",
+    "tesseract.js-core": "7.0.0"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.4",

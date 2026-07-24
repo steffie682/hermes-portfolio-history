@@ -34,6 +34,7 @@ node_modules/
 .next/
 dist/
 build/
+public/ocr/
 coverage/
 tsconfig.tsbuildinfo
 .playwright/

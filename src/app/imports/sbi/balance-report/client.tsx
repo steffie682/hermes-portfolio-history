@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { buildSbiBalanceReportSafeReport } from '@/import/sbi/balance-report-safe-report';
+import { runSbiBrowserOcr, validateOcrPageRange } from '@/import/sbi/browser-ocr';
 import { extractPdfStructure, type PdfDocumentLoader } from '@/import/sbi/pdf-structure-extractor';
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -34,53 +35,179 @@ function hasPdfMagic(source: Uint8Array): boolean {
 
 export default function SbiBalanceReportClient({
   inspectPdf = inspectPdfInBrowser,
+  runOcr = runSbiBrowserOcr,
 }: {
   inspectPdf?: (source: Uint8Array, signal: AbortSignal) => Promise<SafeReport>;
+  runOcr?: (
+    source: Uint8Array,
+    range: { startPage: number; endPage: number },
+    signal: AbortSignal,
+    onProgress: (completed: number, total: number) => void,
+  ) => Promise<SafeReport>;
 }) {
   const operationVersion = useRef(0);
   const activeInspection = useRef<AbortController | null>(null);
+  const retainedPdfBytes = useRef<Uint8Array | null>(null);
   const [report, setReport] = useState<SafeReport | null>(null);
+  const [ocrPageCount, setOcrPageCount] = useState<number | null>(null);
+  const [startPage, setStartPage] = useState(1);
+  const [endPage, setEndPage] = useState(1);
+  const [ocrProgress, setOcrProgress] = useState({ completed: 0, total: 0 });
+  const [ocrRunning, setOcrRunning] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
+
+  function wipeRetainedBytes() {
+    retainedPdfBytes.current?.fill(0);
+    retainedPdfBytes.current = null;
+  }
 
   useEffect(() => () => {
     operationVersion.current += 1;
     activeInspection.current?.abort();
     activeInspection.current = null;
+    wipeRetainedBytes();
   }, []);
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
     activeInspection.current?.abort();
     activeInspection.current = null;
+    wipeRetainedBytes();
     const version = ++operationVersion.current;
     const file = event.currentTarget.files?.[0];
     setReport(null);
+    setOcrPageCount(null);
+    setOcrRunning(false);
+    setOcrProgress({ completed: 0, total: 0 });
     setStatus('');
     setError('');
-    if (!file) return;
+    if (!file) {
+      input.value = '';
+      return;
+    }
     if (file.size > MAX_FILE_BYTES) {
+      input.value = '';
       setError('PDFは20 MB以下のファイルを選んでください。');
       return;
     }
     setStatus('PDFを端末内で確認しています…');
+    let bytes: Uint8Array | null = null;
     try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      if (version !== operationVersion.current) return;
+      bytes = new Uint8Array(await file.arrayBuffer());
+      input.value = '';
+      if (version !== operationVersion.current) {
+        bytes.fill(0);
+        bytes = null;
+        return;
+      }
       if (!hasPdfMagic(bytes)) throw new Error('not-pdf');
+      retainedPdfBytes.current = bytes;
       const controller = new AbortController();
       activeInspection.current = controller;
-      const nextReport = await inspectPdf(bytes, controller.signal);
+      const inspectionBytes = bytes.slice();
+      let nextReport: SafeReport;
+      try {
+        nextReport = await inspectPdf(inspectionBytes, controller.signal);
+      } finally {
+        inspectionBytes.fill(0);
+      }
       if (version !== operationVersion.current) return;
-      setReport(nextReport);
-      setStatus(`PDF ${nextReport.pageCount}ページ`);
+      const needsOcr = nextReport.pages.length > 0
+        && nextReport.pages.every((page) =>
+          page.extractionMode === 'none' && page.items.length === 0);
+      if (needsOcr) {
+        const defaultEnd = Math.min(5, nextReport.pageCount);
+        setStartPage(1);
+        setEndPage(defaultEnd);
+        setOcrPageCount(nextReport.pageCount);
+        setStatus(`自動抽出できませんでした。PDF ${nextReport.pageCount}ページ`);
+      } else {
+        setReport(nextReport);
+        setStatus(`PDF ${nextReport.pageCount}ページ`);
+        wipeRetainedBytes();
+        bytes = null;
+      }
     } catch {
       if (version !== operationVersion.current) return;
+      wipeRetainedBytes();
       setReport(null);
+      setOcrPageCount(null);
       setStatus('');
       setError('PDFを確認できませんでした。SBIの取引残高報告書PDFを選び直してください。');
     } finally {
+      input.value = '';
+      if (bytes && retainedPdfBytes.current !== bytes) bytes.fill(0);
       if (version === operationVersion.current) activeInspection.current = null;
     }
+  }
+
+  async function handleStartOcr() {
+    if (ocrPageCount === null || !retainedPdfBytes.current) return;
+    const ocrBytes = retainedPdfBytes.current;
+    let range: { startPage: number; endPage: number };
+    try {
+      range = validateOcrPageRange(startPage, endPage, ocrPageCount);
+    } catch {
+      setError('開始・終了ページはPDF内の整数で、開始≤終了、合計5ページ以内にしてください。');
+      return;
+    }
+    const version = operationVersion.current;
+    const controller = new AbortController();
+    activeInspection.current?.abort();
+    activeInspection.current = controller;
+    setReport(null);
+    setError('');
+    setOcrRunning(true);
+    setOcrProgress({ completed: 0, total: range.endPage - range.startPage + 1 });
+    setStatus('端末内で日本語OCRを準備しています…');
+    try {
+      const nextReport = await runOcr(
+        ocrBytes,
+        range,
+        controller.signal,
+        (completed, total) => {
+          if (version !== operationVersion.current || controller.signal.aborted) return;
+          setOcrProgress({ completed, total });
+          setStatus(`端末内で日本語OCRを実行中… ${completed}/${total}ページ`);
+        },
+      );
+      if (version !== operationVersion.current || controller.signal.aborted) return;
+      const hasKnownLabel = nextReport.pages.some((page) =>
+        page.items.some((item) => item.kind === 'known-label'));
+      if (!hasKnownLabel) throw new Error('ocr-known-label-required');
+      setReport(nextReport);
+      setOcrPageCount(null);
+      setStatus(`OCRが完了しました（${range.endPage - range.startPage + 1}ページ）`);
+    } catch (ocrError) {
+      if (version !== operationVersion.current || controller.signal.aborted) return;
+      setReport(null);
+      setOcrPageCount(null);
+      setStatus('');
+      setError(ocrError instanceof Error && ocrError.message === 'ocr-known-label-required'
+        ? 'OCR結果に既知の見出しがありません。ページ範囲またはPDFを確認してください。'
+        : '日本語OCRを完了できませんでした。ページ範囲またはPDFを確認してください。');
+    } finally {
+      ocrBytes.fill(0);
+      if (retainedPdfBytes.current === ocrBytes) retainedPdfBytes.current = null;
+      if (version === operationVersion.current) {
+        activeInspection.current = null;
+        setOcrRunning(false);
+      }
+    }
+  }
+
+  function handleCancelOcr() {
+    operationVersion.current += 1;
+    activeInspection.current?.abort();
+    activeInspection.current = null;
+    wipeRetainedBytes();
+    setReport(null);
+    setOcrPageCount(null);
+    setOcrRunning(false);
+    setOcrProgress({ completed: 0, total: 0 });
+    setError('');
+    setStatus('OCRをキャンセルしました。再開するにはPDFを選び直してください。');
   }
 
   const labels = report
@@ -97,10 +224,54 @@ export default function SbiBalanceReportClient({
         <label htmlFor="sbi-balance-report-pdf">SBI取引残高報告書PDF</label>
         <input id="sbi-balance-report-pdf" type="file" accept=".pdf,application/pdf" onChange={handleFileChange} />
         <strong>PDFは外部へ送信されません</strong>
-        <p>このbrowser内で見出しと表の配置だけを確認し、氏名・口座番号・銘柄・金額はレポートへ残しません。</p>
+        <p>このブラウザー内で見出しと表の配置だけを確認し、氏名・口座番号・銘柄・金額はJSONへ残しません。</p>
+        <p>処理中の一時的な値は参照を外し、ガベージコレクションの対象として解放します。</p>
       </div>
       {status ? <p className="import-live-status" role="status">{status}</p> : null}
       {error ? <div className="import-error" role="alert">{error}</div> : null}
+      {ocrPageCount !== null ? (
+        <section className="import-file-panel" aria-labelledby="sbi-ocr-title">
+          <h2 id="sbi-ocr-title">端末内の日本語OCR</h2>
+          <p>
+            テキストを自動抽出できなかったため、指定ページを画像として端末内で読み取ります。
+            PDFやOCR結果を外部へ送信せず、最大5ページだけ処理します。
+          </p>
+          <p>OCRには誤認識があります。JSONは既知の見出し・分類・粗い配置・件数だけを含み、取引値の証拠にはなりません。</p>
+          <label htmlFor="sbi-ocr-start-page">開始ページ</label>
+          <input
+            id="sbi-ocr-start-page"
+            type="number"
+            min="1"
+            max={ocrPageCount}
+            step="1"
+            value={startPage}
+            disabled={ocrRunning}
+            onChange={(event) => setStartPage(Number(event.currentTarget.value))}
+          />
+          <label htmlFor="sbi-ocr-end-page">終了ページ</label>
+          <input
+            id="sbi-ocr-end-page"
+            type="number"
+            min="1"
+            max={ocrPageCount}
+            step="1"
+            value={endPage}
+            disabled={ocrRunning}
+            onChange={(event) => setEndPage(Number(event.currentTarget.value))}
+          />
+          <button type="button" disabled={ocrRunning} onClick={() => void handleStartOcr()}>
+            日本語OCRを開始
+          </button>
+          <button type="button" onClick={handleCancelOcr}>OCRをキャンセル</button>
+          {ocrProgress.total > 0 ? (
+            <progress
+              aria-label="日本語OCRの進捗"
+              value={ocrProgress.completed}
+              max={ocrProgress.total}
+            />
+          ) : null}
+        </section>
+      ) : null}
       {report ? (
         <section className="safe-report-result" aria-labelledby="safe-report-title">
           <h2 id="safe-report-title">安全な構造レポート</h2>
@@ -117,7 +288,9 @@ export default function SbiBalanceReportClient({
           >
             安全な構造レポートを保存
           </a>
-          <p className="preview-note">元PDFではなく、保存したJSONだけを共有できます。</p>
+          <p className="preview-note">
+            このJSONは帳票形式の診断用です。元PDFや取引値の代替ではなく、JSONだけを共有できます。
+          </p>
         </section>
       ) : null}
     </>

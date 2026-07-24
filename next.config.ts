@@ -40,9 +40,28 @@ const deviceEnrollmentHeaders = [
   { key: 'X-Content-Type-Options', value: 'nosniff' },
 ];
 
+const versionlessOcrAssetHeaders = [
+  { key: 'Content-Security-Policy', value: "default-src 'none'" },
+  { key: 'Cache-Control', value: 'public, max-age=0, must-revalidate' },
+  { key: 'X-Content-Type-Options', value: 'nosniff' },
+];
+
 const nextConfig: NextConfig = {
   async headers() {
     return [
+      {
+        source: '/ocr/worker.min.js',
+        headers: [
+          {
+            key: 'Content-Security-Policy',
+            value: "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'",
+          },
+          { key: 'Cache-Control', value: 'public, max-age=0, must-revalidate' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+        ],
+      },
+      { source: '/ocr/core/:path*', headers: versionlessOcrAssetHeaders },
+      { source: '/ocr/lang/:path*', headers: versionlessOcrAssetHeaders },
       {
         source: '/imports/sbi((?!/distribution-report$).*)',
         headers: [
