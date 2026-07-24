@@ -8,12 +8,14 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgPolicy,
   pgTable,
   text,
   timestamp,
   uniqueIndex,
   uuid,
+  date,
 } from 'drizzle-orm/pg-core';
 
 export const appMetadata = pgTable('app_metadata', {
@@ -274,6 +276,95 @@ export const ledgerEvents = pgTable.withRLS(
       using: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')`,
     }),
     pgPolicy('ledger_events_owner_insert', {
+      for: 'insert', to: 'public',
+      withCheck: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')`,
+    }),
+  ],
+);
+
+export const balanceReportSnapshots = pgTable.withRLS(
+  'balance_report_snapshots',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    ownerUserId: text('owner_user_id').notNull().references(() => authUsers.id, { onDelete: 'restrict' }),
+    brokerAccountId: uuid('broker_account_id').notNull(),
+    statementDate: date('statement_date', { mode: 'string' }).notNull(),
+    fingerprint: text('fingerprint').notNull(),
+    status: text('status').notNull(),
+    positionCount: integer('position_count').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('balance_report_snapshots_owner_account_id_uidx')
+      .on(table.ownerUserId, table.brokerAccountId, table.id),
+    uniqueIndex('balance_report_snapshots_owner_fingerprint_uidx')
+      .on(table.ownerUserId, table.fingerprint),
+    foreignKey({
+      name: 'balance_report_snapshots_owner_broker_account_fk',
+      columns: [table.ownerUserId, table.brokerAccountId],
+      foreignColumns: [brokerAccounts.ownerUserId, brokerAccounts.id],
+    }).onDelete('restrict'),
+    check('balance_report_snapshots_status_check', sql`${table.status} = 'confirmed'`),
+    check('balance_report_snapshots_position_count_check', sql`${table.positionCount} BETWEEN 0 AND 100`),
+    check('balance_report_snapshots_fingerprint_check', sql`${table.fingerprint} ~ '^[0-9a-f]{64}$'`),
+    pgPolicy('balance_report_snapshots_owner_select', {
+      for: 'select', to: 'public',
+      using: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')`,
+    }),
+    pgPolicy('balance_report_snapshots_owner_insert', {
+      for: 'insert', to: 'public',
+      withCheck: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')`,
+    }),
+  ],
+);
+
+export const balanceReportPositions = pgTable.withRLS(
+  'balance_report_positions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    ownerUserId: text('owner_user_id').notNull().references(() => authUsers.id, { onDelete: 'restrict' }),
+    brokerAccountId: uuid('broker_account_id').notNull(),
+    snapshotId: uuid('snapshot_id').notNull(),
+    positionIndex: integer('position_index').notNull(),
+    sourcePage: integer('source_page').notNull(),
+    sourceRow: integer('source_row').notNull(),
+    side: text('side').notNull(),
+    securityCode: text('security_code').notNull(),
+    securityName: text('security_name').notNull(),
+    quantity: text('quantity').notNull(),
+    unitPriceYen: numeric('unit_price_yen', { precision: 24, scale: 6, mode: 'string' }).notNull(),
+    openedOn: date('opened_on', { mode: 'string' }).notNull(),
+    dueOn: date('due_on', { mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('balance_report_positions_snapshot_index_uidx')
+      .on(table.snapshotId, table.positionIndex),
+    uniqueIndex('balance_report_positions_snapshot_source_locator_uidx')
+      .on(table.snapshotId, table.sourcePage, table.sourceRow),
+    foreignKey({
+      name: 'balance_report_positions_owner_account_snapshot_fk',
+      columns: [table.ownerUserId, table.brokerAccountId, table.snapshotId],
+      foreignColumns: [
+        balanceReportSnapshots.ownerUserId,
+        balanceReportSnapshots.brokerAccountId,
+        balanceReportSnapshots.id,
+      ],
+    }).onDelete('restrict'),
+    check('balance_report_positions_index_check', sql`${table.positionIndex} BETWEEN 1 AND 100`),
+    check('balance_report_positions_source_page_check', sql`${table.sourcePage} BETWEEN 1 AND 100`),
+    check('balance_report_positions_source_row_check', sql`${table.sourceRow} BETWEEN 1 AND 100`),
+    check('balance_report_positions_side_check', sql`${table.side} IN ('buy', 'sell')`),
+    check('balance_report_positions_security_code_check', sql`${table.securityCode} ~ '^[A-Z0-9]{4}$'`),
+    check('balance_report_positions_security_name_check', sql`char_length(${table.securityName}) BETWEEN 1 AND 100`),
+    check('balance_report_positions_quantity_check', sql`${table.quantity} ~ '^[1-9][0-9]{0,17}$'`),
+    check('balance_report_positions_price_check', sql`${table.unitPriceYen} > 0`),
+    check('balance_report_positions_dates_check', sql`${table.dueOn} IS NULL OR ${table.dueOn} >= ${table.openedOn}`),
+    pgPolicy('balance_report_positions_owner_select', {
+      for: 'select', to: 'public',
+      using: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')`,
+    }),
+    pgPolicy('balance_report_positions_owner_insert', {
       for: 'insert', to: 'public',
       withCheck: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')`,
     }),

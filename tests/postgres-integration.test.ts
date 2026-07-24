@@ -9,6 +9,8 @@ import { resolveSessionPrincipal } from '@/auth/session';
 import { hashSessionToken } from '@/auth/session-token';
 import type { AppDatabase } from '@/db/client';
 import { createImportRepository } from '@/import/repository';
+import { createBalanceReportSnapshotRepository } from '@/import/sbi/balance-report-snapshot-repository';
+import { canonicalizeBalanceReportSnapshot } from '@/import/sbi/balance-report-snapshot';
 import { createMemoryPrivateSourceStorage } from '@/import/storage/memory-private-source-storage';
 import { migrationDirectories } from './helpers/migrations';
 
@@ -27,6 +29,7 @@ postgresDescribe('real PostgreSQL tenant security', () => {
     appUrl.username = 'portfolio_app';
     appUrl.password = 'test-only-password';
     const app = postgres(appUrl.toString(), { max: 4 });
+    const appSecond = postgres(appUrl.toString(), { max: 1 });
     try {
       for (const statement of [
         `CREATE ROLE portfolio_app LOGIN PASSWORD 'test-only-password' NOSUPERUSER NOBYPASSRLS`,
@@ -374,9 +377,114 @@ postgresDescribe('real PostgreSQL tenant security', () => {
       const [userAAccount] = await admin<{ id: string }[]>`
         select id from broker_accounts where owner_user_id = 'user-a'
       `;
+      const [userBAccountForSnapshot] = await admin<{ id: string }[]>`
+        select id from broker_accounts where owner_user_id = 'user-b'
+      `;
       const userAPrincipal = await resolveSessionPrincipal('import-user-a', {
         findActiveUserByTokenHash: async () => 'user-a',
       });
+      const balanceCatalogs = await admin<{
+        relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean;
+      }[]>`
+        select relname, relrowsecurity, relforcerowsecurity from pg_class
+        where relname in ('balance_report_snapshots', 'balance_report_positions')
+        order by relname
+      `;
+      expect(balanceCatalogs).toHaveLength(2);
+      expect(balanceCatalogs.every((row) => row.relrowsecurity && row.relforcerowsecurity)).toBe(true);
+      const balanceAcl = await admin<Record<string, boolean>[]>`
+        select
+          has_table_privilege('portfolio_app', c.oid, 'SELECT') as select,
+          has_table_privilege('portfolio_app', c.oid, 'INSERT') as insert,
+          has_table_privilege('portfolio_app', c.oid, 'UPDATE') as update,
+          has_table_privilege('portfolio_app', c.oid, 'DELETE') as delete,
+          has_table_privilege('portfolio_app', c.oid, 'TRUNCATE') as truncate,
+          has_table_privilege('portfolio_app', c.oid, 'REFERENCES') as references,
+          has_table_privilege('portfolio_app', c.oid, 'TRIGGER') as trigger
+        from pg_class c
+        where c.relname in ('balance_report_snapshots', 'balance_report_positions')
+        order by c.relname
+      `;
+      expect(balanceAcl).toHaveLength(2);
+      expect(balanceAcl.every((row) => row.select && row.insert
+        && !row.update && !row.delete && !row.truncate && !row.references && !row.trigger)).toBe(true);
+
+      const canonicalSnapshot = canonicalizeBalanceReportSnapshot({
+        brokerAccountId: userAAccount.id,
+        statementDate: '2026-07-23',
+        confirmedCompleteFromOriginal: true,
+        confirmedNoPositions: false,
+        positions: [
+          {
+            sourcePage: 2, sourceRow: 1, side: 'buy', securityCode: 'A1B2',
+            securityName: '合成建玉', quantity: '2', unitPriceYen: '100',
+            openedOn: '2026-07-01', dueOn: null,
+          },
+          {
+            sourcePage: 2, sourceRow: 2, side: 'buy', securityCode: 'A1B2',
+            securityName: '合成建玉', quantity: '2', unitPriceYen: '100',
+            openedOn: '2026-07-01', dueOn: null,
+          },
+        ],
+      });
+      const balanceRepositoryA = createBalanceReportSnapshotRepository(appDb);
+      const balanceRepositoryB = createBalanceReportSnapshotRepository(
+        drizzle({ client: appSecond }) as AppDatabase,
+      );
+      const concurrentSnapshots = await Promise.all([
+        balanceRepositoryA.save(userAPrincipal!, canonicalSnapshot),
+        balanceRepositoryB.save(userAPrincipal!, canonicalSnapshot),
+      ]);
+      expect(concurrentSnapshots.map((result) => result.created).sort()).toEqual([false, true]);
+      expect(new Set(concurrentSnapshots.map((result) => result.snapshot.id)).size).toBe(1);
+      const [balanceCounts] = await admin<{ parents: number; children: number }[]>`
+        select
+          (select count(*)::int from balance_report_snapshots where owner_user_id = 'user-a') parents,
+          (select count(*)::int from balance_report_positions where owner_user_id = 'user-a') children
+      `;
+      expect(balanceCounts).toEqual({ parents: 1, children: 2 });
+      const snapshotId = concurrentSnapshots[0].snapshot.id;
+
+      await expect(app.begin(async (tx) => {
+        await tx`select set_config('app.current_user_id', 'user-a', true)`;
+        await tx`
+          insert into balance_report_snapshots
+            (owner_user_id, broker_account_id, statement_date, fingerprint, status, position_count)
+          values ('user-b', ${userBAccountForSnapshot.id}, '2026-07-23', ${'f'.repeat(64)}, 'confirmed', 0)
+        `;
+      })).rejects.toMatchObject({ code: '42501' });
+      await app.begin(async (tx) => {
+        await tx`select set_config('app.current_user_id', 'user-b', true)`;
+        const rows = await tx`select id from balance_report_snapshots where id = ${snapshotId}`;
+        expect(rows).toEqual([]);
+      });
+      await expect(app.begin(async (tx) => {
+        await tx`select set_config('app.current_user_id', 'user-b', true)`;
+        await tx`
+          insert into balance_report_positions
+            (owner_user_id, broker_account_id, snapshot_id, position_index, source_page,
+             source_row, side, security_code, security_name, quantity, unit_price_yen, opened_on)
+          values ('user-b', ${userBAccountForSnapshot.id}, ${snapshotId}, 3, 2, 3,
+                  'buy', 'C3D4', '合成混在', '1', 1, '2026-07-01')
+        `;
+      })).rejects.toMatchObject({ code: '23503' });
+      for (const statement of [
+        `update balance_report_snapshots set position_count = 0 where id = '${snapshotId}'`,
+        `delete from balance_report_snapshots where id = '${snapshotId}'`,
+        `update balance_report_positions set quantity = '3' where snapshot_id = '${snapshotId}'`,
+        `delete from balance_report_positions where snapshot_id = '${snapshotId}'`,
+      ]) {
+        await expect(app.begin(async (tx) => {
+          await tx`select set_config('app.current_user_id', 'user-a', true)`;
+          await tx.unsafe(statement);
+        })).rejects.toMatchObject({ code: '42501' });
+      }
+      const [remainingBalanceCounts] = await admin<{ parents: number; children: number }[]>`
+        select
+          (select count(*)::int from balance_report_snapshots where id = ${snapshotId}) parents,
+          (select count(*)::int from balance_report_positions where snapshot_id = ${snapshotId}) children
+      `;
+      expect(remainingBalanceCounts).toEqual({ parents: 1, children: 2 });
       const importRepository = createImportRepository(
         appDb,
         createMemoryPrivateSourceStorage(),
@@ -556,6 +664,7 @@ postgresDescribe('real PostgreSQL tenant security', () => {
         { conname: 'ledger_events_owner_user_id_user_id_fkey', confdeltype: 'c' },
       ]);
     } finally {
+      await appSecond.end();
       await app.end();
       await revoker.end();
       await admin.end();

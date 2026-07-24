@@ -50,13 +50,10 @@ describe('initial migration', () => {
   });
 
   it('remediates committed ledger access for already-migrated databases', () => {
-    const latestDirectory = readdirSync('drizzle', { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .sort()
-      .at(-1);
-    expect(latestDirectory).toBeDefined();
-    const sql = readFileSync(`drizzle/${latestDirectory}/migration.sql`, 'utf8');
+    const sql = readFileSync(
+      'drizzle/20260723122410_cloudy_fat_cobra/migration.sql',
+      'utf8',
+    );
 
     expect(sql).toContain(
       'DROP POLICY "ledger_events_owner_isolation" ON "ledger_events";',
@@ -79,6 +76,64 @@ describe('initial migration', () => {
     expect(sql).toContain(
       'GRANT SELECT, INSERT ON "ledger_events" TO portfolio_app;',
     );
+  });
+
+  it('adds append-only tenant-isolated balance report evidence', () => {
+    const latestDirectory = readdirSync('drizzle', { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort()
+      .at(-1);
+    const sql = readFileSync(`drizzle/${latestDirectory}/migration.sql`, 'utf8');
+    for (const table of ['balance_report_snapshots', 'balance_report_positions']) {
+      expect(sql).toContain(`ALTER TABLE "${table}" FORCE ROW LEVEL SECURITY;`);
+      expect(sql).toContain(`REVOKE ALL ON "${table}" FROM PUBLIC;`);
+    }
+    expect(sql).toContain(
+      'REVOKE ALL ON "balance_report_snapshots", "balance_report_positions" FROM portfolio_app;',
+    );
+    expect(sql).toContain(
+      'GRANT SELECT, INSERT ON "balance_report_snapshots", "balance_report_positions" TO portfolio_app;',
+    );
+    expect(sql).not.toMatch(/GRANT [^;]*(?:UPDATE|DELETE)[^;]*balance_report_/);
+    expect(sql).toContain('balance_report_snapshots_owner_broker_account_fk');
+    expect(sql).toContain('balance_report_positions_owner_account_snapshot_fk');
+    expect(sql).toContain('"source_row" integer NOT NULL');
+    expect(sql).toContain('balance_report_positions_snapshot_source_locator_uidx');
+    expect(sql).toContain(
+      'CONSTRAINT "balance_report_snapshots_position_count_check" CHECK ("position_count" BETWEEN 0 AND 100)',
+    );
+    expect(sql).not.toMatch(/balance_report_snapshots_purpose_check|["]purpose["]/);
+  });
+
+  it('applies the zero-position snapshot constraint from the newest migration', async () => {
+    const db = new PGlite();
+    try {
+      await applyAllMigrations(db);
+      await db.exec(`
+        insert into "user" (id, name) values ('migration-zero-user', 'Migration Zero');
+        insert into broker_accounts (id, owner_user_id, broker, display_name)
+        values ('00000000-0000-4000-8000-000000000090', 'migration-zero-user', 'sbi', 'SBI');
+        insert into balance_report_snapshots (
+          owner_user_id, broker_account_id, statement_date,
+          fingerprint, status, position_count
+        ) values (
+          'migration-zero-user', '00000000-0000-4000-8000-000000000090',
+          '2026-07-24', repeat('0', 64), 'confirmed', 0
+        );
+      `);
+      await expect(db.exec(`
+        insert into balance_report_snapshots (
+          owner_user_id, broker_account_id, statement_date,
+          fingerprint, status, position_count
+        ) values (
+          'migration-zero-user', '00000000-0000-4000-8000-000000000090',
+          '2026-07-24', repeat('1', 64), 'confirmed', -1
+        );
+      `)).rejects.toThrow();
+    } finally {
+      await db.close();
+    }
   });
 
   it('applies cleanly with the expected app_metadata constraints', async () => {
