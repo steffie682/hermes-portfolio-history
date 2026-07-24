@@ -53,9 +53,7 @@ describe('authenticated SBI balance report page', () => {
       { id: '2', broker: 'sbi', displayName: 'Synthetic SBI' },
     ]);
     mocks.listRecent.mockResolvedValue([{
-      id: '3', brokerAccountId: '2', statementDate: '2026-07-20',
-      status: 'confirmed', positionCount: 4,
-      createdAt: new Date('2026-07-21T00:00:00Z'),
+      id: '3', statementDate: '2026-07-20', positionCount: 4,
     }]);
     render(await SbiBalanceReportPage());
     expect(mocks.listBrokerAccounts).toHaveBeenCalledWith(principal);
@@ -63,5 +61,7 @@ describe('authenticated SBI balance report page', () => {
     expect(screen.getByText(/2026-07-20/)).toBeTruthy();
     expect(document.body.textContent).not.toContain('Other');
     expect(document.body.textContent).not.toMatch(/ownerUserId|raw OCR/i);
+    const clientProps = JSON.stringify(await SbiBalanceReportPage());
+    expect(clientProps).not.toMatch(/brokerAccountId|status|createdAt|ownerUserId|positions/);
   });
 });

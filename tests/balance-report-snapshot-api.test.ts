@@ -7,10 +7,10 @@ import { BalanceReportSnapshotRepositoryError } from '@/import/sbi/balance-repor
 const body = {
   brokerAccountId: '11111111-1111-4111-8111-111111111111',
   statementDate: '2026-07-23',
-  confirmedFromOriginal: true,
+  confirmedCompleteFromOriginal: true,
   confirmedNoPositions: false,
   positions: [{
-    sourcePage: 1, side: 'buy', securityCode: 'T3S7', securityName: '合成銘柄',
+    sourcePage: 1, sourceRow: 1, side: 'buy', securityCode: 'T3S7', securityName: '合成銘柄',
     quantity: '2', unitPriceYen: '99.5', openedOn: '2026-07-01', dueOn: null,
   }],
 };
@@ -45,11 +45,13 @@ function setup(active = true) {
       created: true,
       snapshot: {
         id: '22222222-2222-4222-8222-222222222222',
-        brokerAccountId: body.brokerAccountId,
         statementDate: body.statementDate,
-        status: 'confirmed',
         positionCount: 1,
+        brokerAccountId: body.brokerAccountId,
+        status: 'confirmed',
         createdAt: new Date('2026-07-24T00:00:00Z'),
+        ownerUserId: 'synthetic-user',
+        positions: [{ sensitive: true }],
       },
     }),
   };
@@ -167,7 +169,12 @@ describe('balance report snapshot API', () => {
     const createdBody = await created.json();
     expect(JSON.stringify(createdBody)).not.toContain('owner');
     expect(createdBody).not.toHaveProperty('snapshot.purpose');
-    expect(repository.save.mock.calls[0][1]).not.toHaveProperty('confirmedFromOriginal');
+    expect(createdBody.snapshot).toEqual({
+      id: '22222222-2222-4222-8222-222222222222',
+      statementDate: '2026-07-23',
+      positionCount: 1,
+    });
+    expect(repository.save.mock.calls[0][1]).not.toHaveProperty('confirmedCompleteFromOriginal');
     expect(repository.save.mock.calls[0][1]).not.toHaveProperty('confirmedNoPositions');
     expect(repository.save.mock.calls[0][1]).not.toHaveProperty('purpose');
 
@@ -175,11 +182,8 @@ describe('balance report snapshot API', () => {
       created: false,
       snapshot: {
         id: '22222222-2222-4222-8222-222222222222',
-        brokerAccountId: body.brokerAccountId,
         statementDate: body.statementDate,
-        status: 'confirmed',
         positionCount: 1,
-        createdAt: new Date('2026-07-24T00:00:00Z'),
       },
     });
     const replay = await handler.POST(request());

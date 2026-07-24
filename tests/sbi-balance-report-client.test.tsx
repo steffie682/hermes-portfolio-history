@@ -90,13 +90,14 @@ describe('SBI balance report client', () => {
 
     fireEvent.change(screen.getByLabelText('報告書基準日'), { target: { value: '2026-07-23' } });
     fireEvent.change(screen.getByLabelText('元PDFのページ'), { target: { value: '4' } });
+    fireEvent.change(screen.getByLabelText('ページ内の明細番号（上から）'), { target: { value: '2' } });
     fireEvent.change(screen.getByLabelText('売買'), { target: { value: 'sell' } });
     fireEvent.change(screen.getByLabelText('銘柄コード'), { target: { value: 'Q7W2' } });
     fireEvent.change(screen.getByLabelText('銘柄名'), { target: { value: '合成確認銘柄' } });
     fireEvent.change(screen.getByLabelText('数量'), { target: { value: '0008' } });
-    fireEvent.change(screen.getByLabelText('単価（円）'), { target: { value: '0100.50' } });
+    fireEvent.change(screen.getByLabelText('建単価（原本記載値・円）'), { target: { value: '0100.50' } });
     fireEvent.change(screen.getByLabelText('建日'), { target: { value: '2026-07-01' } });
-    fireEvent.click(screen.getByLabelText(/元の取引残高報告書を読んで確認/));
+    fireEvent.click(screen.getByLabelText(/元の取引残高報告書の各信用建玉明細ページをすべて確認/));
     fireEvent.click(screen.getByRole('button', { name: '確認した建玉を保存' }));
 
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
@@ -104,10 +105,11 @@ describe('SBI balance report client', () => {
     expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({
       brokerAccountId: '11111111-1111-4111-8111-111111111111',
       statementDate: '2026-07-23',
-      confirmedFromOriginal: true,
+      confirmedCompleteFromOriginal: true,
       confirmedNoPositions: false,
       positions: [{
         sourcePage: 4,
+        sourceRow: 2,
         side: 'sell',
         securityCode: 'Q7W2',
         securityName: '合成確認銘柄',
@@ -150,7 +152,7 @@ describe('SBI balance report client', () => {
     fireEvent.submit(save.closest('form')!);
     expect(fetch).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByLabelText(/元の取引残高報告書を読んで確認/));
+    fireEvent.click(screen.getByLabelText(/元の取引残高報告書の各信用建玉明細ページをすべて確認/));
     expect(save.disabled).toBe(false);
     fireEvent.click(save);
 
@@ -158,7 +160,7 @@ describe('SBI balance report client', () => {
     expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({
       brokerAccountId: '11111111-1111-4111-8111-111111111111',
       statementDate: '2026-07-23',
-      confirmedFromOriginal: true,
+      confirmedCompleteFromOriginal: true,
       confirmedNoPositions: true,
       positions: [],
     });
@@ -175,7 +177,7 @@ describe('SBI balance report client', () => {
     />);
     choose(pdfFile());
     await screen.findByRole('heading', { name: '次の手順：信用建玉を本人確認して保存' });
-    fireEvent.click(screen.getByLabelText(/元の取引残高報告書を読んで確認/));
+    fireEvent.click(screen.getByLabelText(/元の取引残高報告書の各信用建玉明細ページをすべて確認/));
 
     const form = screen.getByRole('button', { name: '確認した建玉を保存' }).closest('form')!;
     fireEvent.submit(form);
@@ -207,11 +209,8 @@ describe('SBI balance report client', () => {
       accounts={[{ id: '11111111-1111-4111-8111-111111111111', displayName: 'SBI' }]}
       recentSnapshots={[{
         id: '33333333-3333-4333-8333-333333333333',
-        brokerAccountId: '11111111-1111-4111-8111-111111111111',
         statementDate: '2026-07-20',
-        status: 'confirmed',
         positionCount: 2,
-        createdAt: '2026-07-21T00:00:00.000Z',
       }]}
     />);
     expect(screen.getByText(/2026-07-20/)).toBeTruthy();
@@ -229,7 +228,7 @@ describe('SBI balance report client', () => {
     />);
     choose(pdfFile());
     await screen.findByRole('heading', { name: '次の手順：信用建玉を本人確認して保存' });
-    fireEvent.click(screen.getByLabelText(/元の取引残高報告書を読んで確認/));
+    fireEvent.click(screen.getByLabelText(/元の取引残高報告書の各信用建玉明細ページをすべて確認/));
     fireEvent.submit(screen.getByRole('button', { name: '確認した建玉を保存' }).closest('form')!);
     expect(await screen.findByText('選択したSBI口座を確認できませんでした。')).toBeTruthy();
     expect(document.body.textContent).not.toContain('sensitive detail');
@@ -245,7 +244,7 @@ describe('SBI balance report client', () => {
     />);
     choose(pdfFile());
     await screen.findByRole('heading', { name: '次の手順：信用建玉を本人確認して保存' });
-    fireEvent.click(screen.getByLabelText(/元の取引残高報告書を読んで確認/));
+    fireEvent.click(screen.getByLabelText(/元の取引残高報告書の各信用建玉明細ページをすべて確認/));
     fireEvent.submit(screen.getByRole('button', { name: '確認した建玉を保存' }).closest('form')!);
     expect(await screen.findByText('現在保存できません。時間をおいてもう一度お試しください。'))
       .toBeTruthy();
@@ -428,5 +427,126 @@ describe('SBI balance report client', () => {
     fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
     expect((await screen.findByRole('alert')).textContent).toContain('既知の見出し');
     expect(screen.queryByRole('link', { name: '診断用JSONを保存（任意）' })).toBeNull();
+  });
+
+  it('keeps diagnostics but gates saving when extracted labels are not the exact report label', async () => {
+    const wrongReport = {
+      ...safeReport,
+      pages: [{
+        ...safeReport.pages[0],
+        items: [{ kind: 'known-label' as const, labels: ['信用取引'], x: 1, y: 1, width: 1, height: 1 }],
+      }],
+    };
+    render(<SbiBalanceReportClient
+      accounts={[{ id: '11111111-1111-4111-8111-111111111111', displayName: '合成SBI口座' }]}
+      inspectPdf={vi.fn().mockResolvedValue(wrongReport)}
+    />);
+    choose(pdfFile());
+    expect((await screen.findByRole('alert')).textContent).toContain('保存できません');
+    expect(screen.getByRole('link', { name: '診断用JSONを保存（任意）' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '確認した建玉を保存' })).toBeNull();
+  });
+
+  it('does not expose the save form after OCR finds only a generic known label', async () => {
+    const genericOcr = {
+      ...ocrReport,
+      pages: [{
+        ...ocrReport.pages[0],
+        items: [{ kind: 'known-label' as const, labels: ['信用取引'], x: 1, y: 1, width: 1, height: 1 }],
+      }],
+    };
+    render(<SbiBalanceReportClient
+      accounts={[{ id: '11111111-1111-4111-8111-111111111111', displayName: '合成SBI口座' }]}
+      inspectPdf={vi.fn().mockResolvedValue(emptyReport)}
+      runOcr={vi.fn().mockResolvedValue(genericOcr)}
+    />);
+    choose(pdfFile());
+    await screen.findByRole('heading', { name: '端末内の日本語OCR' });
+    fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('保存できません');
+    expect(screen.queryByRole('button', { name: '確認した建玉を保存' })).toBeNull();
+  });
+
+  it.each([
+    ['account', () => fireEvent.change(screen.getByLabelText('SBI口座'), { target: { value: '22222222-2222-4222-8222-222222222222' } })],
+    ['statement date', () => fireEvent.change(screen.getByLabelText('報告書基準日'), { target: { value: '2026-07-22' } })],
+    ['zero toggle', () => fireEvent.click(screen.getByLabelText('報告書で信用建玉が0件であることを確認した'))],
+    ['position field', () => fireEvent.change(screen.getByLabelText('数量'), { target: { value: '2' } })],
+    ['add row', () => fireEvent.click(screen.getByRole('button', { name: '建玉を追加' }))],
+  ])('synchronously invalidates confirmation after changing %s', async (_category, mutate) => {
+    render(<SbiBalanceReportClient
+      accounts={[
+        { id: '11111111-1111-4111-8111-111111111111', displayName: '合成SBI口座1' },
+        { id: '22222222-2222-4222-8222-222222222222', displayName: '合成SBI口座2' },
+      ]}
+      inspectPdf={vi.fn().mockResolvedValue(safeReport)}
+    />);
+    choose(pdfFile());
+    await screen.findByRole('heading', { name: '次の手順：信用建玉を本人確認して保存' });
+    const confirmation = screen.getByLabelText(/各信用建玉明細ページをすべて確認/) as HTMLInputElement;
+    fireEvent.click(confirmation);
+    const save = screen.getByRole('button', { name: '確認した建玉を保存' }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    mutate();
+    expect(confirmation.checked).toBe(false);
+    expect(save.disabled).toBe(true);
+  });
+
+  it('synchronously invalidates confirmation when removing a row', async () => {
+    render(<SbiBalanceReportClient
+      accounts={[{ id: '11111111-1111-4111-8111-111111111111', displayName: '合成SBI口座' }]}
+      inspectPdf={vi.fn().mockResolvedValue(safeReport)}
+    />);
+    choose(pdfFile());
+    await screen.findByRole('heading', { name: '次の手順：信用建玉を本人確認して保存' });
+    fireEvent.click(screen.getByRole('button', { name: '建玉を追加' }));
+    const confirmation = screen.getByLabelText(/各信用建玉明細ページをすべて確認/) as HTMLInputElement;
+    fireEvent.click(confirmation);
+    const save = screen.getByRole('button', { name: '確認した建玉を保存' }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    fireEvent.click(screen.getAllByRole('button', { name: 'この建玉を削除' })[0]);
+    expect(confirmation.checked).toBe(false);
+    expect(save.disabled).toBe(true);
+  });
+
+  it('replaces a confirmed report with a fresh unchecked persistence form', async () => {
+    render(<SbiBalanceReportClient
+      accounts={[{ id: '11111111-1111-4111-8111-111111111111', displayName: '合成SBI口座' }]}
+      inspectPdf={vi.fn().mockResolvedValue(safeReport)}
+    />);
+    choose(pdfFile(1));
+    const confirmation = await screen.findByLabelText(/各信用建玉明細ページをすべて確認/) as HTMLInputElement;
+    fireEvent.click(confirmation);
+    expect(confirmation.checked).toBe(true);
+    choose(pdfFile(2));
+    const replacement = await screen.findByLabelText(/各信用建玉明細ページをすべて確認/) as HTMLInputElement;
+    expect(replacement.checked).toBe(false);
+    expect((screen.getByRole('button', { name: '確認した建玉を保存' }) as HTMLButtonElement).disabled)
+      .toBe(true);
+  });
+
+  it('clears the saved summary and save status when confirmed input becomes stale', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      snapshot: {
+        id: '33333333-3333-4333-8333-333333333333',
+        statementDate: '2026-07-23',
+        positionCount: 1,
+      },
+    }), { status: 201, headers: { 'content-type': 'application/json' } })));
+    render(<SbiBalanceReportClient
+      accounts={[{ id: '11111111-1111-4111-8111-111111111111', displayName: '合成SBI口座' }]}
+      inspectPdf={vi.fn().mockResolvedValue(safeReport)}
+    />);
+    choose(pdfFile());
+    await screen.findByRole('heading', { name: '次の手順：信用建玉を本人確認して保存' });
+    fireEvent.change(screen.getByLabelText('報告書基準日'), { target: { value: '2026-07-23' } });
+    fireEvent.click(screen.getByLabelText('報告書で信用建玉が0件であることを確認した'));
+    fireEvent.click(screen.getByLabelText(/各信用建玉明細ページをすべて確認/));
+    fireEvent.click(screen.getByRole('button', { name: '確認した建玉を保存' }));
+    expect(await screen.findByText(/本人確認した信用建玉を保存しました/)).toBeTruthy();
+    expect(screen.getByText(/保存内容：2026-07-23/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('報告書基準日'), { target: { value: '2026-07-22' } });
+    expect(screen.queryByText(/本人確認した信用建玉を保存しました/)).toBeNull();
+    expect(screen.queryByText(/保存内容：2026-07-23/)).toBeNull();
   });
 });

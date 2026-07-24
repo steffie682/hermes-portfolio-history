@@ -33,10 +33,7 @@ export default async function SbiBalanceReportPage() {
         </p>
         <SbiBalanceReportClient
           accounts={accounts}
-          recentSnapshots={snapshots.map((snapshot) => ({
-            ...snapshot,
-            createdAt: snapshot.createdAt.toISOString(),
-          }))}
+          recentSnapshots={snapshots}
         />
       </section>
     </main>

@@ -232,6 +232,7 @@ export default function SbiBalanceReportClient({
     ? [...new Set(report.pages.flatMap((page) => page.items.flatMap((item) => item.labels ?? [])))]
     : [];
   const reportJson = report ? JSON.stringify(report, null, 2) : '';
+  const isBalanceReport = labels.includes('取引残高報告書');
   const reportHref = report
     ? `data:application/json;charset=utf-8,${encodeURIComponent(reportJson)}`
     : '';
@@ -307,7 +308,13 @@ export default function SbiBalanceReportClient({
       ) : null}
       {report ? (
         <>
-        {accounts.length > 0 ? <BalanceReportPositionForm accounts={accounts} /> : null}
+        {accounts.length > 0 && isBalanceReport
+          ? <BalanceReportPositionForm accounts={accounts} />
+          : accounts.length > 0 ? (
+            <div className="import-error" role="alert">
+              取引残高報告書を確認できないため、このPDFからチェックポイントを保存できません。
+            </div>
+          ) : null}
         <section className="safe-report-result" aria-labelledby="safe-report-title">
           <h2 id="safe-report-title">安全な構造レポート</h2>
           <p>検出できた既知の見出し</p>

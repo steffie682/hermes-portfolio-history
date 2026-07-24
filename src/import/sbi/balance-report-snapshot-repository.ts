@@ -17,13 +17,16 @@ export class BalanceReportSnapshotRepositoryError extends Error {
   }
 }
 
-const publicSelection = {
+export type PublicBalanceReportSnapshot = {
+  id: string;
+  statementDate: string;
+  positionCount: number;
+};
+
+const internalSelection = {
   id: balanceReportSnapshots.id,
-  brokerAccountId: balanceReportSnapshots.brokerAccountId,
   statementDate: balanceReportSnapshots.statementDate,
-  status: balanceReportSnapshots.status,
   positionCount: balanceReportSnapshots.positionCount,
-  createdAt: balanceReportSnapshots.createdAt,
 };
 
 export function createBalanceReportSnapshotRepository(db: AppDatabase) {
@@ -60,11 +63,11 @@ export function createBalanceReportSnapshotRepository(db: AppDatabase) {
           .onConflictDoNothing({
             target: [balanceReportSnapshots.ownerUserId, balanceReportSnapshots.fingerprint],
           })
-          .returning(publicSelection);
+          .returning(internalSelection);
 
         if (!inserted) {
           const [existing] = await tx
-            .select(publicSelection)
+            .select(internalSelection)
             .from(balanceReportSnapshots)
             .where(and(
               eq(balanceReportSnapshots.ownerUserId, ownerUserId),
@@ -82,6 +85,7 @@ export function createBalanceReportSnapshotRepository(db: AppDatabase) {
             snapshotId: inserted.id,
             positionIndex: index + 1,
             sourcePage: position.sourcePage,
+            sourceRow: position.sourceRow,
             side: position.side,
             securityCode: position.securityCode,
             securityName: position.securityName,
@@ -100,7 +104,7 @@ export function createBalanceReportSnapshotRepository(db: AppDatabase) {
       return db.transaction(async (tx) => {
         await tx.execute(sql`select set_config('app.current_user_id', ${ownerUserId}, true)`);
         return tx
-          .select(publicSelection)
+          .select(internalSelection)
           .from(balanceReportSnapshots)
           .where(eq(balanceReportSnapshots.ownerUserId, ownerUserId))
           .orderBy(desc(balanceReportSnapshots.createdAt))

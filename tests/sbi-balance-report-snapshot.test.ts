@@ -8,10 +8,11 @@ import {
 const synthetic = {
   brokerAccountId: '11111111-1111-4111-8111-111111111111',
   statementDate: '2026-07-23',
-  confirmedFromOriginal: true,
+  confirmedCompleteFromOriginal: true,
   confirmedNoPositions: false,
   positions: [{
     sourcePage: 2,
+    sourceRow: 1,
     side: 'buy',
     securityCode: 'A1B2',
     securityName: '  合成テスト銘柄  ',
@@ -30,7 +31,7 @@ describe('SBI balance report snapshot domain', () => {
       quantity: '42',
       unitPriceYen: '120.5',
     });
-    expect(canonical.confirmedFromOriginal).toBeUndefined();
+    expect(canonical.confirmedCompleteFromOriginal).toBeUndefined();
     expect(canonical.confirmedNoPositions).toBeUndefined();
     expect(canonical).not.toHaveProperty('purpose');
   });
@@ -65,14 +66,22 @@ describe('SBI balance report snapshot domain', () => {
   it.each([
     [{ ...synthetic, extra: true }, 'unknown key'],
     [{ ...synthetic, purpose: 'opening' }, 'legacy purpose is an unknown key'],
-    [{ ...synthetic, confirmedFromOriginal: false }, 'confirmation'],
+    [{ ...synthetic, confirmedCompleteFromOriginal: false }, 'confirmation'],
+    [{ ...synthetic, confirmedFromOriginal: true }, 'old confirmation is unknown'],
     [{ ...synthetic, statementDate: '2026-02-30' }, 'date'],
     [{ ...synthetic, positions: [] }, 'accidental empty positions'],
     [{ ...synthetic, confirmedNoPositions: true }, 'zero confirmation with positions'],
     [{ ...synthetic, confirmedNoPositions: undefined }, 'required zero confirmation'],
-    [{ ...synthetic, positions: [synthetic.positions[0], synthetic.positions[0]] }, 'duplicate position'],
+    [{
+      ...synthetic,
+      positions: [
+        synthetic.positions[0],
+        { ...synthetic.positions[0], sourceRow: 2 },
+      ],
+    }, 'economically identical positions with distinct locators are legitimate'],
     [{ ...synthetic, positions: Array.from({ length: 101 }, () => synthetic.positions[0]) }, 'positions'],
     [{ ...synthetic, positions: [{ ...synthetic.positions[0], sourcePage: 0 }] }, 'source page'],
+    [{ ...synthetic, positions: [{ ...synthetic.positions[0], sourceRow: 0 }] }, 'source row'],
     [{ ...synthetic, positions: [{ ...synthetic.positions[0], securityCode: 'abc1' }] }, 'security code'],
     [{ ...synthetic, positions: [{ ...synthetic.positions[0], securityName: 'bad\tname' }] }, 'safe text'],
     [{ ...synthetic, positions: [{ ...synthetic.positions[0], securityName: '\tbad name' }] }, 'leading control'],
@@ -98,7 +107,21 @@ describe('SBI balance report snapshot domain', () => {
       }],
     }, 'due before statement date'],
   ])('rejects malformed or unsafe input: $1', (input, label) => {
+    if (label === 'economically identical positions with distinct locators are legitimate') {
+      expect(canonicalizeBalanceReportSnapshot(input).positions).toHaveLength(2);
+      return;
+    }
     expect(label).toBeTruthy();
     expect(() => canonicalizeBalanceReportSnapshot(input)).toThrow(BalanceReportSnapshotValidationError);
+  });
+
+  it('rejects duplicate source page and row locators', () => {
+    expect(() => canonicalizeBalanceReportSnapshot({
+      ...synthetic,
+      positions: [
+        synthetic.positions[0],
+        { ...synthetic.positions[0], securityCode: 'C3D4' },
+      ],
+    })).toThrow(BalanceReportSnapshotValidationError);
   });
 });

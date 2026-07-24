@@ -5,6 +5,7 @@ CREATE TABLE "balance_report_positions" (
 	"snapshot_id" uuid NOT NULL,
 	"position_index" integer NOT NULL,
 	"source_page" integer NOT NULL,
+	"source_row" integer NOT NULL,
 	"side" text NOT NULL,
 	"security_code" text NOT NULL,
 	"security_name" text NOT NULL,
@@ -15,6 +16,7 @@ CREATE TABLE "balance_report_positions" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "balance_report_positions_index_check" CHECK ("position_index" BETWEEN 1 AND 100),
 	CONSTRAINT "balance_report_positions_source_page_check" CHECK ("source_page" BETWEEN 1 AND 100),
+	CONSTRAINT "balance_report_positions_source_row_check" CHECK ("source_row" BETWEEN 1 AND 100),
 	CONSTRAINT "balance_report_positions_side_check" CHECK ("side" IN ('buy', 'sell')),
 	CONSTRAINT "balance_report_positions_security_code_check" CHECK ("security_code" ~ '^[A-Z0-9]{4}$'),
 	CONSTRAINT "balance_report_positions_security_name_check" CHECK (char_length("security_name") BETWEEN 1 AND 100),
@@ -40,6 +42,7 @@ CREATE TABLE "balance_report_snapshots" (
 --> statement-breakpoint
 ALTER TABLE "balance_report_snapshots" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
 CREATE UNIQUE INDEX "balance_report_positions_snapshot_index_uidx" ON "balance_report_positions" ("snapshot_id","position_index");--> statement-breakpoint
+CREATE UNIQUE INDEX "balance_report_positions_snapshot_source_locator_uidx" ON "balance_report_positions" ("snapshot_id","source_page","source_row");--> statement-breakpoint
 CREATE UNIQUE INDEX "balance_report_snapshots_owner_account_id_uidx" ON "balance_report_snapshots" ("owner_user_id","broker_account_id","id");--> statement-breakpoint
 CREATE UNIQUE INDEX "balance_report_snapshots_owner_fingerprint_uidx" ON "balance_report_snapshots" ("owner_user_id","fingerprint");--> statement-breakpoint
 ALTER TABLE "balance_report_positions" ADD CONSTRAINT "balance_report_positions_owner_user_id_user_id_fkey" FOREIGN KEY ("owner_user_id") REFERENCES "user"("id") ON DELETE RESTRICT;--> statement-breakpoint
@@ -57,6 +60,7 @@ REVOKE ALL ON "balance_report_positions" FROM PUBLIC;--> statement-breakpoint
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'portfolio_app') THEN
+    REVOKE ALL ON "balance_report_snapshots", "balance_report_positions" FROM portfolio_app;
     GRANT SELECT, INSERT ON "balance_report_snapshots", "balance_report_positions" TO portfolio_app;
   END IF;
 END

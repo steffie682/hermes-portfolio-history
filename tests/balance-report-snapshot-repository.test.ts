@@ -10,10 +10,10 @@ import { applyAllMigrations } from './helpers/migrations';
 const input = canonicalizeBalanceReportSnapshot({
   brokerAccountId: '00000000-0000-4000-8000-000000000001',
   statementDate: '2026-07-23',
-  confirmedFromOriginal: true,
+  confirmedCompleteFromOriginal: true,
   confirmedNoPositions: false,
   positions: [{
-    sourcePage: 3, side: 'sell', securityCode: 'Z9Y8', securityName: '合成銘柄',
+    sourcePage: 3, sourceRow: 1, side: 'sell', securityCode: 'Z9Y8', securityName: '合成銘柄',
     quantity: '7', unitPriceYen: '2500.25', openedOn: '2026-07-02', dueOn: null,
   }],
 });
@@ -47,7 +47,7 @@ describe('balance report snapshot repository', () => {
       const zero = canonicalizeBalanceReportSnapshot({
         brokerAccountId: input.brokerAccountId,
         statementDate: '2026-07-22',
-        confirmedFromOriginal: true,
+        confirmedCompleteFromOriginal: true,
         confirmedNoPositions: true,
         positions: [],
       });
@@ -106,7 +106,30 @@ describe('balance report snapshot repository', () => {
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ positionCount: 1, statementDate: '2026-07-23' });
       expect(rows[0]).not.toHaveProperty('ownerUserId');
+      expect(rows[0]).not.toHaveProperty('brokerAccountId');
+      expect(rows[0]).not.toHaveProperty('status');
+      expect(rows[0]).not.toHaveProperty('createdAt');
       expect(rows[0]).not.toHaveProperty('purpose');
+    } finally {
+      await context.client.close();
+    }
+  });
+
+  it('rolls back the parent when a child locator constraint fails', async () => {
+    const context = await setup();
+    try {
+      const invalidAtDatabaseBoundary = {
+        ...input,
+        positions: [{ ...input.positions[0], sourceRow: 101 }],
+      };
+      await expect(context.repository.save(context.principal, invalidAtDatabaseBoundary))
+        .rejects.toThrow();
+      const counts = await context.client.query<{ snapshots: number; positions: number }>(
+        `select
+          (select count(*)::int from balance_report_snapshots) snapshots,
+          (select count(*)::int from balance_report_positions) positions`,
+      );
+      expect(counts.rows[0]).toEqual({ snapshots: 0, positions: 0 });
     } finally {
       await context.client.close();
     }

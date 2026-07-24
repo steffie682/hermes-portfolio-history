@@ -4,16 +4,17 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const UNSAFE_TEXT = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 const ROOT_KEYS = [
-  'brokerAccountId', 'confirmedFromOriginal', 'confirmedNoPositions',
+  'brokerAccountId', 'confirmedCompleteFromOriginal', 'confirmedNoPositions',
   'positions', 'statementDate',
 ];
 const POSITION_KEYS = [
   'dueOn', 'openedOn', 'quantity', 'securityCode', 'securityName',
-  'side', 'sourcePage', 'unitPriceYen',
+  'side', 'sourcePage', 'sourceRow', 'unitPriceYen',
 ];
 
 export type CanonicalBalanceReportPosition = {
   sourcePage: number;
+  sourceRow: number;
   side: 'buy' | 'sell';
   securityCode: string;
   securityName: string;
@@ -27,7 +28,7 @@ export type CanonicalBalanceReportSnapshot = {
   brokerAccountId: string;
   statementDate: string;
   positions: CanonicalBalanceReportPosition[];
-  confirmedFromOriginal?: never;
+  confirmedCompleteFromOriginal?: never;
   confirmedNoPositions?: never;
 };
 
@@ -87,7 +88,7 @@ export function canonicalizeBalanceReportSnapshot(
     typeof root.brokerAccountId !== 'string'
     || !UUID.test(root.brokerAccountId)
     || !validDate(root.statementDate)
-    || root.confirmedFromOriginal !== true
+    || root.confirmedCompleteFromOriginal !== true
     || typeof root.confirmedNoPositions !== 'boolean'
     || !Array.isArray(root.positions)
     || root.positions.length > 100
@@ -103,6 +104,9 @@ export function canonicalizeBalanceReportSnapshot(
       !Number.isInteger(position.sourcePage)
       || (position.sourcePage as number) < 1
       || (position.sourcePage as number) > 100
+      || !Number.isInteger(position.sourceRow)
+      || (position.sourceRow as number) < 1
+      || (position.sourceRow as number) > 100
       || (position.side !== 'buy' && position.side !== 'sell')
       || typeof position.securityCode !== 'string'
       || !/^[A-Z0-9]{4}$/.test(position.securityCode)
@@ -121,6 +125,7 @@ export function canonicalizeBalanceReportSnapshot(
     ) invalid();
     return {
       sourcePage: position.sourcePage as number,
+      sourceRow: position.sourceRow as number,
       side: position.side,
       securityCode: position.securityCode,
       securityName,
@@ -130,7 +135,8 @@ export function canonicalizeBalanceReportSnapshot(
       dueOn: position.dueOn,
     };
   });
-  if (new Set(positions.map((position) => JSON.stringify(position))).size !== positions.length) {
+  if (new Set(positions.map(({ sourcePage, sourceRow }) => `${sourcePage}:${sourceRow}`)).size
+    !== positions.length) {
     invalid();
   }
 

@@ -15,11 +15,8 @@ type SaveResult = {
   created: boolean;
   snapshot: {
     id: string;
-    brokerAccountId: string;
     statementDate: string;
-    status: string;
     positionCount: number;
-    createdAt: Date;
   };
 };
 
@@ -97,7 +94,13 @@ export function createBalanceReportSnapshotHandlers(input: {
       try {
         const result = await input.repository.save(principal, snapshot);
         return Response.json(
-          { snapshot: result.snapshot },
+          {
+            snapshot: {
+              id: result.snapshot.id,
+              statementDate: result.snapshot.statementDate,
+              positionCount: result.snapshot.positionCount,
+            },
+          },
           {
             status: result.created ? 201 : 200,
             headers: { 'Cache-Control': 'no-store' },

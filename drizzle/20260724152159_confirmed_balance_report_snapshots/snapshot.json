@@ -435,6 +435,19 @@
       "table": "balance_report_positions"
     },
     {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "source_row",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "balance_report_positions"
+    },
+    {
       "type": "text",
       "typeSchema": null,
       "notNull": true,
@@ -448,6 +461,41 @@
       "table": "balance_report_positions"
     },
     {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "snapshot_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "source_page",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "source_row",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "balance_report_positions_snapshot_source_locator_uidx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "balance_report_positions"
+    },
+    {
       "type": "text",
       "typeSchema": null,
       "notNull": true,
@@ -457,6 +505,13 @@
       "identity": null,
       "name": "security_code",
       "entityType": "columns",
+      "schema": "public",
+      "table": "balance_report_positions"
+    },
+    {
+      "value": "\"source_row\" BETWEEN 1 AND 100",
+      "name": "balance_report_positions_source_row_check",
+      "entityType": "checks",
       "schema": "public",
       "table": "balance_report_positions"
     },

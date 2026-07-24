@@ -327,6 +327,7 @@ export const balanceReportPositions = pgTable.withRLS(
     snapshotId: uuid('snapshot_id').notNull(),
     positionIndex: integer('position_index').notNull(),
     sourcePage: integer('source_page').notNull(),
+    sourceRow: integer('source_row').notNull(),
     side: text('side').notNull(),
     securityCode: text('security_code').notNull(),
     securityName: text('security_name').notNull(),
@@ -339,6 +340,8 @@ export const balanceReportPositions = pgTable.withRLS(
   (table) => [
     uniqueIndex('balance_report_positions_snapshot_index_uidx')
       .on(table.snapshotId, table.positionIndex),
+    uniqueIndex('balance_report_positions_snapshot_source_locator_uidx')
+      .on(table.snapshotId, table.sourcePage, table.sourceRow),
     foreignKey({
       name: 'balance_report_positions_owner_account_snapshot_fk',
       columns: [table.ownerUserId, table.brokerAccountId, table.snapshotId],
@@ -350,6 +353,7 @@ export const balanceReportPositions = pgTable.withRLS(
     }).onDelete('restrict'),
     check('balance_report_positions_index_check', sql`${table.positionIndex} BETWEEN 1 AND 100`),
     check('balance_report_positions_source_page_check', sql`${table.sourcePage} BETWEEN 1 AND 100`),
+    check('balance_report_positions_source_row_check', sql`${table.sourceRow} BETWEEN 1 AND 100`),
     check('balance_report_positions_side_check', sql`${table.side} IN ('buy', 'sell')`),
     check('balance_report_positions_security_code_check', sql`${table.securityCode} ~ '^[A-Z0-9]{4}$'`),
     check('balance_report_positions_security_name_check', sql`char_length(${table.securityName}) BETWEEN 1 AND 100`),

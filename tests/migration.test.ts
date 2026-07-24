@@ -90,11 +90,16 @@ describe('initial migration', () => {
       expect(sql).toContain(`REVOKE ALL ON "${table}" FROM PUBLIC;`);
     }
     expect(sql).toContain(
+      'REVOKE ALL ON "balance_report_snapshots", "balance_report_positions" FROM portfolio_app;',
+    );
+    expect(sql).toContain(
       'GRANT SELECT, INSERT ON "balance_report_snapshots", "balance_report_positions" TO portfolio_app;',
     );
     expect(sql).not.toMatch(/GRANT [^;]*(?:UPDATE|DELETE)[^;]*balance_report_/);
     expect(sql).toContain('balance_report_snapshots_owner_broker_account_fk');
     expect(sql).toContain('balance_report_positions_owner_account_snapshot_fk');
+    expect(sql).toContain('"source_row" integer NOT NULL');
+    expect(sql).toContain('balance_report_positions_snapshot_source_locator_uidx');
     expect(sql).toContain(
       'CONSTRAINT "balance_report_snapshots_position_count_check" CHECK ("position_count" BETWEEN 0 AND 100)',
     );
