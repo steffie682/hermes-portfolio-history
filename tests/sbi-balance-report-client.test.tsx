@@ -20,8 +20,31 @@ const safeReport = {
   }],
 };
 
+const emptyReport = {
+  ...safeReport,
+  pages: [{
+    pageNumber: 1,
+    width: 600,
+    height: 840,
+    extractionMode: 'none' as const,
+    rawItemCount: 0,
+    discardedItemCount: 0,
+    items: [],
+  }],
+};
+
+const ocrReport = {
+  ...safeReport,
+  pages: safeReport.pages.map((page) => ({ ...page, extractionMode: 'ocr' as const })),
+};
+
 function choose(file: File) {
-  fireEvent.change(screen.getByLabelText('SBI取引残高報告書PDF'), { target: { files: [file] } });
+  const input = screen.getByLabelText('SBI取引残高報告書PDF') as HTMLInputElement;
+  Object.defineProperty(input, 'value', {
+    value: 'C:\\fakepath\\report.pdf', writable: true, configurable: true,
+  });
+  fireEvent.change(input, { target: { files: [file] } });
+  return input;
 }
 
 function pdfFile(marker = 1) {
@@ -38,6 +61,24 @@ function deferred<T>() {
 afterEach(() => cleanup());
 
 describe('SBI balance report client', () => {
+  it('clears the file control and releases invalid bytes after reading', async () => {
+    const source = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    render(<SbiBalanceReportClient inspectPdf={vi.fn()} />);
+    const input = choose({
+      size: source.length,
+      arrayBuffer: vi.fn().mockResolvedValue(source.buffer),
+    } as unknown as File);
+    await screen.findByRole('alert');
+    expect(input.value).toBe('');
+    expect([...source]).toEqual([0, 0, 0, 0, 0, 0]);
+  });
+
+  it('describes byte cleanup as garbage-collection release, not secure erasure', () => {
+    render(<SbiBalanceReportClient inspectPdf={vi.fn()} />);
+    expect(screen.getByText(/ガベージコレクション/)).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/安全に消去|securely erased/i);
+  });
+
   it('shows only safe structure and provides a fixed-name safe report', async () => {
     const inspectPdf = vi.fn().mockResolvedValue(safeReport);
     render(<SbiBalanceReportClient inspectPdf={inspectPdf} />);
@@ -98,5 +139,90 @@ describe('SBI balance report client', () => {
     view.unmount();
     expect(signal.aborted).toBe(true);
     pending.resolve(safeReport);
+  });
+
+  it('offers bounded on-device Japanese OCR instead of an empty diagnostic download', async () => {
+    render(<SbiBalanceReportClient inspectPdf={vi.fn().mockResolvedValue(emptyReport)} />);
+    choose(pdfFile());
+
+    expect(await screen.findByRole('heading', { name: '端末内の日本語OCR' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: '安全な構造レポートを保存' })).toBeNull();
+    expect(screen.getByText(/外部へ送信せず/)).toBeTruthy();
+    expect((screen.getByLabelText('開始ページ') as HTMLInputElement).value).toBe('1');
+    expect((screen.getByLabelText('終了ページ') as HTMLInputElement).value).toBe('1');
+    expect(screen.getByRole('button', { name: 'OCRをキャンセル' })).toBeTruthy();
+  });
+
+  it('validates OCR range and exposes only a useful safe OCR report on success', async () => {
+    const runOcr = vi.fn().mockResolvedValue(ocrReport);
+    render(<SbiBalanceReportClient
+      inspectPdf={vi.fn().mockResolvedValue({ ...emptyReport, pageCount: 10 })}
+      runOcr={runOcr}
+    />);
+    choose(pdfFile());
+    await screen.findByRole('heading', { name: '端末内の日本語OCR' });
+    fireEvent.change(screen.getByLabelText('終了ページ'), { target: { value: '6' } });
+    fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('5ページ以内');
+    expect(runOcr).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('終了ページ'), { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
+    expect(await screen.findByText('OCRが完了しました（5ページ）')).toBeTruthy();
+    expect(screen.getByRole('link', { name: '安全な構造レポートを保存' })).toBeTruthy();
+  });
+
+  it('wipes retained PDF bytes after OCR success', async () => {
+    const source = new Uint8Array([37, 80, 68, 70, 45, 7]);
+    const runOcr = vi.fn().mockResolvedValue(ocrReport);
+    render(<SbiBalanceReportClient inspectPdf={vi.fn().mockResolvedValue(emptyReport)} runOcr={runOcr} />);
+    choose({ size: source.length, arrayBuffer: vi.fn().mockResolvedValue(source.buffer) } as unknown as File);
+    await screen.findByRole('heading', { name: '端末内の日本語OCR' });
+    fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
+    await screen.findByText('OCRが完了しました（1ページ）');
+    expect([...source]).toEqual([0, 0, 0, 0, 0, 0]);
+  });
+
+  it('aborts OCR and wipes bytes on cancel without allowing its stale result', async () => {
+    const source = new Uint8Array([37, 80, 68, 70, 45, 8]);
+    const pending = deferred<typeof ocrReport>();
+    const runOcr = vi.fn().mockReturnValue(pending.promise);
+    render(<SbiBalanceReportClient inspectPdf={vi.fn().mockResolvedValue(emptyReport)} runOcr={runOcr} />);
+    choose({ size: source.length, arrayBuffer: vi.fn().mockResolvedValue(source.buffer) } as unknown as File);
+    await screen.findByRole('heading', { name: '端末内の日本語OCR' });
+    fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
+    await waitFor(() => expect(runOcr).toHaveBeenCalledOnce());
+    const signal = runOcr.mock.calls[0][2] as AbortSignal;
+    fireEvent.click(screen.getByRole('button', { name: 'OCRをキャンセル' }));
+    expect(signal.aborted).toBe(true);
+    expect([...source]).toEqual([0, 0, 0, 0, 0, 0]);
+    pending.resolve(ocrReport);
+    await waitFor(() => {
+      expect(screen.queryByRole('link', { name: '安全な構造レポートを保存' })).toBeNull();
+    });
+  });
+
+  it('wipes retained bytes on replacement and unmount', async () => {
+    const first = new Uint8Array([37, 80, 68, 70, 45, 9]);
+    const second = new Uint8Array([37, 80, 68, 70, 45, 10]);
+    const inspectPdf = vi.fn().mockResolvedValue(emptyReport);
+    const view = render(<SbiBalanceReportClient inspectPdf={inspectPdf} />);
+    choose({ size: first.length, arrayBuffer: vi.fn().mockResolvedValue(first.buffer) } as unknown as File);
+    await screen.findByRole('heading', { name: '端末内の日本語OCR' });
+    choose({ size: second.length, arrayBuffer: vi.fn().mockResolvedValue(second.buffer) } as unknown as File);
+    await waitFor(() => expect([...first]).toEqual([0, 0, 0, 0, 0, 0]));
+    await screen.findByRole('heading', { name: '端末内の日本語OCR' });
+    view.unmount();
+    expect([...second]).toEqual([0, 0, 0, 0, 0, 0]);
+  });
+
+  it('shows an error and no download when OCR has no known label', async () => {
+    const runOcr = vi.fn().mockRejectedValue(new Error('ocr-known-label-required'));
+    render(<SbiBalanceReportClient inspectPdf={vi.fn().mockResolvedValue(emptyReport)} runOcr={runOcr} />);
+    choose(pdfFile());
+    await screen.findByRole('heading', { name: '端末内の日本語OCR' });
+    fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('既知の見出し');
+    expect(screen.queryByRole('link', { name: '安全な構造レポートを保存' })).toBeNull();
   });
 });

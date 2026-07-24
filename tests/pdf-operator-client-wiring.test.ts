@@ -32,4 +32,35 @@ describe('PDF operator diagnostic client wiring', () => {
     expect(source).toMatch(/<textarea[^>]*ref=\{pastedText\}[^>]*\/>/);
     expect(source).not.toMatch(/<textarea[^>]*(?:value|onChange)=/);
   });
+
+  it('keeps balance OCR app source free of network, persistence, logs, clipboard, and dangerous HTML', () => {
+    const paths = [
+      'src/app/imports/sbi/balance-report/client.tsx',
+      'src/import/sbi/browser-ocr.ts',
+      'src/import/sbi/ocr-safe-report.ts',
+    ];
+    const source = paths.map((path) => readFileSync(path, 'utf8')).join('\n');
+    const forbidden = [
+      /\bfetch\s*\(/,
+      /\bXMLHttpRequest\b/,
+      /\bnavigator\.sendBeacon\b/,
+      /\bWebSocket\b/,
+      /\bEventSource\b/,
+      /\blocalStorage\b/,
+      /\bsessionStorage\b/,
+      /\bindexedDB\b/,
+      /\bcaches\./,
+      /\bclipboard\b/i,
+      /\bconsole\./,
+      /dangerouslySetInnerHTML/,
+    ];
+    forbidden.forEach((pattern) => expect(source).not.toMatch(pattern));
+    expect(source).not.toContain('<form');
+    expect(source).toContain("validateSameOriginUrl('/ocr/worker.min.js', '/ocr/worker.min.js')");
+    expect(source).toContain("validateSameOriginUrl('/ocr/core', '/ocr/core')");
+    expect(source).toContain("validateSameOriginUrl('/ocr/lang', '/ocr/lang')");
+    expect(source).toContain("cacheMethod: 'none'");
+    expect(source).toContain('workerBlobURL: false');
+    expect(source).toContain('gzip: true');
+  });
 });

@@ -9,6 +9,36 @@ function sourceMatches(source: string, pathname: string): boolean {
 }
 
 describe('authenticated import CSP', () => {
+  it('serves the OCR worker under a restrictive worker response policy', async () => {
+    const entries = await nextConfig.headers!();
+    const route = entries.find((entry) => entry.source === '/ocr/worker.min.js');
+    const csp = route?.headers.find((header) => header.key === 'Content-Security-Policy')?.value;
+    expect(csp).toBe(
+      "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'",
+    );
+    expect(csp).not.toContain('blob:');
+    expect(route?.headers).toContainEqual({ key: 'X-Content-Type-Options', value: 'nosniff' });
+    expect(route?.headers).toContainEqual({
+      key: 'Cache-Control',
+      value: 'public, max-age=0, must-revalidate',
+    });
+  });
+
+  it.each(['/ocr/core/:path*', '/ocr/lang/:path*'])(
+    'serves %s only under a restrictive static-asset policy',
+    async (source) => {
+      const entries = await nextConfig.headers!();
+      const route = entries.find((entry) => entry.source === source);
+      const csp = route?.headers.find((header) => header.key === 'Content-Security-Policy')?.value;
+      expect(csp).toBe("default-src 'none'");
+      expect(route?.headers).toContainEqual({ key: 'X-Content-Type-Options', value: 'nosniff' });
+      expect(route?.headers).toContainEqual({
+        key: 'Cache-Control',
+        value: 'public, max-age=0, must-revalidate',
+      });
+    },
+  );
+
   it('blocks every connection and private-caches nothing on the distribution inspector route', async () => {
     expect(nextConfig.headers).toBeTypeOf('function');
     const entries = await nextConfig.headers!();
