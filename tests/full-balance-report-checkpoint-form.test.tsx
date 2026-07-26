@@ -61,8 +61,52 @@ describe('full balance report checkpoint form', () => {
     for (const page of screen.getAllByLabelText(/ページ$/) as HTMLInputElement[]) {
       expect(page.max).toBe('7');
     }
-    expect(screen.getByText(/決済済み・受渡前の行を含む報告書.*保存できません/)).toBeTruthy();
-    expect(screen.queryByRole('option', { name: '決済済み・受渡前' })).toBeNull();
+    fireEvent.click(screen.getAllByLabelText('原本記載の明細を入力する')[4]);
+    expect(screen.getByRole('option', { name: '未決済' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: '決済ずみ' })).toBeTruthy();
+    expect(screen.queryByText(/決済ずみ.*保存できません/)).toBeNull();
+    expect(screen.getByText('信用取引の建玉残高')).toBeTruthy();
+    expect(screen.getByText(/原本列「銘柄名（弁済期限）」/)).toBeTruthy();
+    expect(screen.getByText(/原本列「数量・市場」/)).toBeTruthy();
+    expect(screen.getByText(/原本列「区分」/)).toBeTruthy();
+  });
+
+  it('sends the exact synthetic settled margin payload and omits blank valuation cells', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      checkpoint: { id: '22222222-2222-4222-8222-222222222222', statementDate: '2026-06-15', rowCount: 1 },
+    }), { status: 201, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetch);
+    render(<BalanceReportPositionForm sourcePageCount={7} accounts={accounts} />);
+    fireEvent.change(screen.getByLabelText('報告書基準日'), { target: { value: '2026-06-15' } });
+    confirmAllSectionsAsZero();
+    fireEvent.click(screen.getAllByLabelText('原本記載の明細を入力する')[4]);
+    fireEvent.change(screen.getByLabelText('状態'), {
+      target: { value: 'settled' },
+    });
+    fireEvent.change(screen.getByLabelText('元PDFのページ'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('ページ内の明細番号（上から）'), { target: { value: '5' } });
+    fireEvent.change(screen.getByLabelText('銘柄コード'), { target: { value: '3579' } });
+    fireEvent.change(screen.getByLabelText('銘柄名'), { target: { value: '合成信用銘柄' } });
+    fireEvent.change(screen.getByLabelText('弁済期限（原本表記）'), { target: { value: '合成期限' } });
+    fireEvent.change(screen.getByLabelText('指定表示（記載がある場合）'), { target: { value: '合成指定表示' } });
+    fireEvent.change(screen.getByLabelText('数量'), { target: { value: '6' } });
+    fireEvent.change(screen.getByLabelText('約定年月日'), { target: { value: '2026-06-01' } });
+    fireEvent.change(screen.getByLabelText('約定単価'), { target: { value: '220' } });
+    fireEvent.change(screen.getByLabelText('最終決済期日または決済予定日'), {
+      target: { value: '2026-06-16' },
+    });
+    fireEvent.click(screen.getByLabelText(/関係する全ページを元の報告書で確認/));
+    fireEvent.click(screen.getByRole('button', { name: '確認した全残高を保存' }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    expect(JSON.parse(fetch.mock.calls[0][1].body).margin.rows).toEqual([{
+      state: 'settled',
+      securityCode: '3579', securityName: '合成信用銘柄',
+      repaymentTermLabel: '合成期限', designationLabel: '合成指定表示', quantity: '6',
+      market: 'tokyo', side: 'buy', contractDate: '2026-06-01', contractUnitPrice: '220',
+      currentPrice: null, fees: null, unrealizedPnl: null,
+      finalSettlementOrPlannedDate: '2026-06-16',
+      sourcePage: 1, sourceRow: 5,
+    }]);
   });
 
   it('sends exact independent stock source states and acquisition-lot semantics', async () => {

@@ -162,11 +162,11 @@ export function createFullBalanceReportCheckpointRepository(db: AppDatabase) {
             ...common, entryId: entryIds.get(`margin:${index + 1}`)!,
             sectionKind: 'margin', rowIndex: index + 1,
             state: row.state, securityCode: row.securityCode, securityName: row.securityName,
+            repaymentTermLabel: row.repaymentTermLabel, designationLabel: row.designationLabel,
             quantity: row.quantity, market: row.market, side: row.side,
             contractDate: row.contractDate, contractUnitPrice: row.contractUnitPrice,
             currentPrice: row.currentPrice, fees: row.fees, unrealizedPnl: row.unrealizedPnl,
-            finalRepaymentDueDate: row.finalRepaymentDueDate,
-            settlementContractDate: row.settlementContractDate,
+            finalSettlementOrPlannedDate: row.finalSettlementOrPlannedDate,
           })));
         }
         return { created: true as const, checkpoint: summary(inserted as never) };

@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "448fcf33-0338-43dd-8901-6a88dc5e5590",
+  "id": "55e0e784-fc37-4f4d-8f50-1998bc181e36",
   "prevIds": [
     "401c7828-711d-4500-a8a3-8892fdd9fd85"
   ],
@@ -1036,6 +1036,19 @@
       "table": "full_balance_report_checkpoints"
     },
     {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "source_page_count",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "full_balance_report_checkpoints"
+    },
+    {
       "type": "text",
       "typeSchema": null,
       "notNull": true,
@@ -1608,6 +1621,32 @@
       "table": "full_balance_report_margin_rows"
     },
     {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "repayment_term_label",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "full_balance_report_margin_rows"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "designation_label",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "full_balance_report_margin_rows"
+    },
+    {
       "type": "numeric(24,6)",
       "typeSchema": null,
       "notNull": true,
@@ -1714,25 +1753,12 @@
     {
       "type": "date",
       "typeSchema": null,
-      "notNull": false,
+      "notNull": true,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "final_repayment_due_date",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "full_balance_report_margin_rows"
-    },
-    {
-      "type": "date",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "settlement_contract_date",
+      "name": "final_settlement_or_planned_date",
       "entityType": "columns",
       "schema": "public",
       "table": "full_balance_report_margin_rows"
@@ -1979,7 +2005,20 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "cost_value_state",
+      "name": "acquisition_unit_price_state",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "full_balance_report_stock_lots"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "purchase_amount_state",
       "entityType": "columns",
       "schema": "public",
       "table": "full_balance_report_stock_lots"
@@ -3117,6 +3156,13 @@
           "opclass": null
         },
         {
+          "value": "section_kind",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
           "value": "row_index",
           "isExpression": false,
           "asc": true,
@@ -3229,6 +3275,13 @@
           "opclass": null
         },
         {
+          "value": "row_index",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
           "value": "id",
           "isExpression": false,
           "asc": true,
@@ -3241,7 +3294,7 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "full_balance_report_entries_owner_account_checkpoint_id_uidx",
+      "name": "full_balance_report_entries_owner_account_checkpoint_entry_uidx",
       "entityType": "indexes",
       "schema": "public",
       "table": "full_balance_report_entries"
@@ -3327,6 +3380,13 @@
           "opclass": null
         },
         {
+          "value": "section_kind",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
           "value": "row_index",
           "isExpression": false,
           "asc": true,
@@ -3349,6 +3409,13 @@
       "columns": [
         {
           "value": "checkpoint_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "section_kind",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -3419,6 +3486,13 @@
       "columns": [
         {
           "value": "checkpoint_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "section_kind",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -4147,6 +4221,7 @@
         "broker_account_id",
         "checkpoint_id",
         "section_kind",
+        "row_index",
         "entry_id"
       ],
       "schemaTo": "public",
@@ -4156,6 +4231,7 @@
         "broker_account_id",
         "checkpoint_id",
         "section_kind",
+        "row_index",
         "id"
       ],
       "onUpdate": "NO ACTION",
@@ -4265,6 +4341,7 @@
         "broker_account_id",
         "checkpoint_id",
         "section_kind",
+        "row_index",
         "entry_id"
       ],
       "schemaTo": "public",
@@ -4274,6 +4351,7 @@
         "broker_account_id",
         "checkpoint_id",
         "section_kind",
+        "row_index",
         "id"
       ],
       "onUpdate": "NO ACTION",
@@ -4307,6 +4385,7 @@
         "broker_account_id",
         "checkpoint_id",
         "section_kind",
+        "row_index",
         "entry_id"
       ],
       "schemaTo": "public",
@@ -4316,6 +4395,7 @@
         "broker_account_id",
         "checkpoint_id",
         "section_kind",
+        "row_index",
         "id"
       ],
       "onUpdate": "NO ACTION",
@@ -4387,6 +4467,7 @@
         "broker_account_id",
         "checkpoint_id",
         "section_kind",
+        "row_index",
         "entry_id"
       ],
       "schemaTo": "public",
@@ -4396,6 +4477,7 @@
         "broker_account_id",
         "checkpoint_id",
         "section_kind",
+        "row_index",
         "id"
       ],
       "onUpdate": "NO ACTION",
@@ -5145,6 +5227,13 @@
       "table": "full_balance_report_checkpoints"
     },
     {
+      "value": "\"source_page_count\" BETWEEN 1 AND 100",
+      "name": "full_balance_report_checkpoints_source_page_count_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "full_balance_report_checkpoints"
+    },
+    {
       "value": "\n      \"source_page\" BETWEEN 1 AND 100 AND \"source_row\" BETWEEN 1 AND 100 AND\n      ((\"entry_kind\" = 'zero' AND \"row_index\" IS NULL) OR\n       (\"entry_kind\" = 'row' AND \"row_index\" BETWEEN 1 AND 100))",
       "name": "full_balance_report_entries_shape_check",
       "entityType": "checks",
@@ -5173,6 +5262,13 @@
       "table": "full_balance_report_fund_balances"
     },
     {
+      "value": "\"section_kind\" = 'fundBalances'",
+      "name": "full_balance_report_fund_balances_section_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "full_balance_report_fund_balances"
+    },
+    {
       "value": "\"row_index\" BETWEEN 1 AND 100",
       "name": "full_balance_report_margin_rows_bounds_check",
       "entityType": "checks",
@@ -5187,8 +5283,15 @@
       "table": "full_balance_report_margin_rows"
     },
     {
-      "value": "\n      char_length(\"security_name\") BETWEEN 1 AND 100 AND\n      \"market\" IN ('tokyo','private','nagoya','fukuoka','sapporo') AND\n      \"quantity\" > 0 AND \"contract_unit_price\" > 0 AND \"side\" IN ('buy', 'sell') AND\n      (\"current_price\" IS NULL OR \"current_price\" > 0) AND\n      ((\"state\" = 'open' AND \"final_repayment_due_date\" IS NOT NULL AND \"settlement_contract_date\" IS NULL AND \"final_repayment_due_date\" >= \"contract_date\") OR\n       (\"state\" = 'settled_pending_delivery' AND \"final_repayment_due_date\" IS NULL AND \"settlement_contract_date\" IS NOT NULL AND \"settlement_contract_date\" >= \"contract_date\"))",
+      "value": "\n      char_length(\"security_name\") BETWEEN 1 AND 100 AND\n      char_length(\"repayment_term_label\") BETWEEN 1 AND 50 AND\n      (\"designation_label\" IS NULL OR char_length(\"designation_label\") BETWEEN 1 AND 50) AND\n      \"market\" IN ('tokyo','private','nagoya','fukuoka','sapporo') AND\n      \"quantity\" > 0 AND \"contract_unit_price\" > 0 AND \"side\" IN ('buy', 'sell') AND\n      (\"current_price\" IS NULL OR \"current_price\" > 0) AND\n      (\"fees\" IS NULL OR \"fees\" >= 0) AND\n      \"state\" IN ('open', 'settled') AND\n      \"final_settlement_or_planned_date\" >= \"contract_date\"",
       "name": "full_balance_report_margin_rows_values_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "full_balance_report_margin_rows"
+    },
+    {
+      "value": "\"section_kind\" = 'margin'",
+      "name": "full_balance_report_margin_rows_section_check",
       "entityType": "checks",
       "schema": "public",
       "table": "full_balance_report_margin_rows"
@@ -5222,8 +5325,15 @@
       "table": "full_balance_report_stock_lots"
     },
     {
-      "value": "\n      char_length(\"security_name\") BETWEEN 1 AND 100 AND \"quantity\" > 0 AND\n      ((\"cost_value_state\" = 'reported' AND \"acquisition_unit_price\" > 0 AND \"purchase_amount\" > 0) OR\n       (\"cost_value_state\" = 'masked_or_unavailable' AND \"acquisition_unit_price\" IS NULL AND \"purchase_amount\" IS NULL)) AND\n      (\"reference_price\" IS NULL OR \"reference_price\" > 0) AND\n      (\"evaluation_amount\" IS NULL OR \"evaluation_amount\" > 0)",
+      "value": "\n      char_length(\"security_name\") BETWEEN 1 AND 100 AND \"quantity\" > 0 AND\n      ((\"acquisition_unit_price_state\" = 'reported' AND \"acquisition_unit_price\" > 0) OR\n       (\"acquisition_unit_price_state\" IN ('masked','absent') AND \"acquisition_unit_price\" IS NULL)) AND\n      ((\"purchase_amount_state\" = 'reported' AND \"purchase_amount\" > 0) OR\n       (\"purchase_amount_state\" IN ('masked','absent') AND \"purchase_amount\" IS NULL)) AND\n      (\"reference_price\" IS NULL OR \"reference_price\" > 0) AND\n      (\"evaluation_amount\" IS NULL OR \"evaluation_amount\" > 0)",
       "name": "full_balance_report_stock_lots_values_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "full_balance_report_stock_lots"
+    },
+    {
+      "value": "\"section_kind\" = 'domesticStockLots'",
+      "name": "full_balance_report_stock_lots_section_check",
       "entityType": "checks",
       "schema": "public",
       "table": "full_balance_report_stock_lots"

@@ -30,8 +30,9 @@ const ROW_KEYS = {
   ],
   margin: [
     'contractDate', 'contractUnitPrice', 'currentPrice', 'fees',
-    'finalRepaymentDueDate', 'market', 'quantity', 'securityCode', 'securityName',
-    'settlementContractDate', 'side', 'sourcePage', 'sourceRow', 'state', 'unrealizedPnl',
+    'designationLabel', 'finalSettlementOrPlannedDate', 'market', 'quantity',
+    'repaymentTermLabel', 'securityCode', 'securityName', 'side', 'sourcePage', 'sourceRow',
+    'state', 'unrealizedPnl',
   ],
 } satisfies Record<(typeof SECTION_NAMES)[number], string[]>;
 
@@ -84,9 +85,11 @@ export type FullBalanceReportCheckpoint = {
   margin: {
     evidenceState: 'explicit_zero' | 'reported'; zeroLocator: SourceLocator | null;
     rows: Array<SourceLocator & {
-      state: 'open';
+      state: 'open' | 'settled';
       securityCode: string;
       securityName: string;
+      repaymentTermLabel: string;
+      designationLabel: string | null;
       quantity: string;
       market: 'tokyo' | 'private' | 'nagoya' | 'fukuoka' | 'sapporo';
       side: 'buy' | 'sell';
@@ -95,8 +98,7 @@ export type FullBalanceReportCheckpoint = {
       currentPrice: string | null;
       fees: string | null;
       unrealizedPnl: string | null;
-      finalRepaymentDueDate: string | null;
-      settlementContractDate: string | null;
+      finalSettlementOrPlannedDate: string;
     }>;
   };
   futures: { evidenceState: 'explicit_zero'; zeroLocator: SourceLocator; rows: [] };
@@ -215,9 +217,11 @@ function validateRow(
       || !nullable(value.referencePriceUnit, (item) => decimal(item, { scale: 6, positive: true }))
     ) invalid();
   } else if (
-    value.state !== 'open'
+    !['open', 'settled'].includes(value.state as string)
     || typeof value.securityCode !== 'string' || !SECURITY_CODE.test(value.securityCode)
     || !safeText(value.securityName, 100)
+    || !safeText(value.repaymentTermLabel, 50)
+    || !nullable(value.designationLabel, (item) => safeText(item, 50))
     || !['tokyo', 'private', 'nagoya', 'fukuoka', 'sapporo'].includes(value.market as string)
     || (value.side !== 'buy' && value.side !== 'sell')
     || !validDate(value.contractDate)
@@ -226,18 +230,13 @@ function validateRow(
     || !nullable(value.currentPrice, (item) => decimal(item, { scale: 6, positive: true }))
     || !nullable(value.fees, (item) => decimal(item, { scale: 2 }))
     || !nullable(value.unrealizedPnl, (item) => decimal(item, { scale: 2, signed: true }))
-    || !nullable(value.finalRepaymentDueDate, validDate)
-    || !nullable(value.settlementContractDate, validDate)
+    || !validDate(value.finalSettlementOrPlannedDate)
   ) invalid();
   if (name === 'margin') {
     const contractDate = value.contractDate as string;
     if (contractDate > statementDate) invalid();
-    if (
-      typeof value.finalRepaymentDueDate !== 'string'
-      || value.settlementContractDate !== null
-      || value.finalRepaymentDueDate < statementDate
-      || value.finalRepaymentDueDate < contractDate
-    ) invalid();
+    const finalDate = value.finalSettlementOrPlannedDate as string;
+    if (finalDate < contractDate) invalid();
   }
 }
 

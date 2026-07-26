@@ -613,14 +613,14 @@ export const fullBalanceReportMarginRows = pgTable.withRLS(
     entryId: uuid('entry_id').notNull(), sectionKind: text('section_kind').notNull(),
     rowIndex: integer('row_index').notNull(),
     state: text('state').notNull(), securityCode: text('security_code').notNull(), securityName: text('security_name').notNull(),
+    repaymentTermLabel: text('repayment_term_label').notNull(), designationLabel: text('designation_label'),
     quantity: numeric('quantity', { precision: 24, scale: 6, mode: 'string' }).notNull(), market: text('market').notNull(),
     side: text('side').notNull(), contractDate: date('contract_date', { mode: 'string' }).notNull(),
     contractUnitPrice: numeric('contract_unit_price', { precision: 24, scale: 6, mode: 'string' }).notNull(),
     currentPrice: numeric('current_price', { precision: 24, scale: 6, mode: 'string' }),
     fees: numeric('fees', { precision: 20, scale: 2, mode: 'string' }),
     unrealizedPnl: numeric('unrealized_pnl', { precision: 20, scale: 2, mode: 'string' }),
-    finalRepaymentDueDate: date('final_repayment_due_date', { mode: 'string' }),
-    settlementContractDate: date('settlement_contract_date', { mode: 'string' }),
+    finalSettlementOrPlannedDate: date('final_settlement_or_planned_date', { mode: 'string' }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
@@ -628,13 +628,14 @@ export const fullBalanceReportMarginRows = pgTable.withRLS(
     check('full_balance_report_margin_rows_code_check', sql`${table.securityCode} ~ '^(?:[0-9][0-9A-HJ-NP-UW-Y][0-9][0-9A-HJ-NP-UW-Y]|[0-9]{3}\\.[0-9]{2})$'`),
     check('full_balance_report_margin_rows_values_check', sql`
       char_length(${table.securityName}) BETWEEN 1 AND 100 AND
+      char_length(${table.repaymentTermLabel}) BETWEEN 1 AND 50 AND
+      (${table.designationLabel} IS NULL OR char_length(${table.designationLabel}) BETWEEN 1 AND 50) AND
       ${table.market} IN ('tokyo','private','nagoya','fukuoka','sapporo') AND
       ${table.quantity} > 0 AND ${table.contractUnitPrice} > 0 AND ${table.side} IN ('buy', 'sell') AND
       (${table.currentPrice} IS NULL OR ${table.currentPrice} > 0) AND
       (${table.fees} IS NULL OR ${table.fees} >= 0) AND
-      ${table.state} = 'open' AND ${table.finalRepaymentDueDate} IS NOT NULL AND
-      ${table.settlementContractDate} IS NULL AND
-      ${table.finalRepaymentDueDate} >= ${table.contractDate}`),
+      ${table.state} IN ('open', 'settled') AND
+      ${table.finalSettlementOrPlannedDate} >= ${table.contractDate}`),
     check('full_balance_report_margin_rows_section_check',
       sql`${table.sectionKind} = 'margin'`),
   ],

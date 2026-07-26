@@ -115,6 +115,56 @@ describe('full balance report checkpoint repository', () => {
     }
   });
 
+  it('persists the exact settled margin state, source contract fields, and final date', async () => {
+    const context = await setup();
+    const marginCheckpoint = validateFullBalanceReportCheckpoint({
+      ...checkpoint,
+      deposits: { evidenceState: 'explicit_zero', zeroLocator: { sourcePage: 1, sourceRow: 1 }, rows: [] },
+      margin: {
+        evidenceState: 'reported',
+        zeroLocator: null,
+        rows: [{
+          state: 'settled',
+          securityCode: '3579',
+          securityName: 'Synthetic Margin',
+          repaymentTermLabel: 'Synthetic Term',
+          designationLabel: 'Synthetic Designation',
+          quantity: '6',
+          market: 'tokyo',
+          side: 'buy',
+          contractDate: '2026-06-01',
+          contractUnitPrice: '220',
+          currentPrice: null,
+          fees: null,
+          unrealizedPnl: null,
+          finalSettlementOrPlannedDate: '2026-06-16',
+          sourcePage: 1,
+          sourceRow: 5,
+        }],
+      },
+    });
+    try {
+      await context.repository.save(context.principal, marginCheckpoint);
+      const rows = await context.client.query<{
+        state: string; repayment_term_label: string; designation_label: string;
+        contract_date: string; contract_unit_price: string; final_settlement_or_planned_date: string;
+      }>(`select state, repayment_term_label, designation_label,
+                 contract_date::text contract_date, contract_unit_price,
+                 final_settlement_or_planned_date::text final_settlement_or_planned_date
+          from full_balance_report_margin_rows`);
+      expect(rows.rows).toEqual([{
+        state: 'settled',
+        repayment_term_label: 'Synthetic Term',
+        designation_label: 'Synthetic Designation',
+        contract_date: '2026-06-01',
+        contract_unit_price: '220.000000',
+        final_settlement_or_planned_date: '2026-06-16',
+      }]);
+    } finally {
+      await context.client.close();
+    }
+  });
+
   it('fails closed for a broker account owned by another user', async () => {
     const context = await setup();
     try {

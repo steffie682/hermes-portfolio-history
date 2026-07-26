@@ -62,6 +62,8 @@ const validCheckpoint = {
       state: 'open',
       securityCode: '3579',
       securityName: '合成信用銘柄',
+      repaymentTermLabel: '合成期限',
+      designationLabel: null,
       quantity: '6',
       market: 'tokyo',
       side: 'buy',
@@ -70,8 +72,7 @@ const validCheckpoint = {
       currentPrice: null,
       fees: null,
       unrealizedPnl: null,
-      finalRepaymentDueDate: '2025-09-30',
-      settlementContractDate: null,
+      finalSettlementOrPlannedDate: '2025-09-30',
       ...locator(5, 1),
     }],
   },
@@ -221,17 +222,33 @@ describe('confirmed full SBI balance-report checkpoint', () => {
       .not.toBe(fingerprintFullBalanceReportCheckpoint('synthetic-owner-a', moved));
   });
 
-  it('rejects settled-pending-delivery until exact source columns are supported', () => {
-    const input = structuredClone(validCheckpoint);
-    input.margin.rows[0] = {
-      ...input.margin.rows[0],
-      state: 'settled_pending_delivery',
-      finalRepaymentDueDate: null,
-      settlementContractDate: '2025-04-16',
-    } as any;
-    expect(() => validateFullBalanceReportCheckpoint(input))
-      .toThrow(FullBalanceReportCheckpointValidationError);
-  });
+  it.each(['open', 'settled'] as const)(
+    'preserves a source final date before the statement independently of %s state',
+    (state) => {
+      const input = structuredClone(validCheckpoint);
+      input.margin.rows[0].state = state;
+      input.margin.rows[0].finalSettlementOrPlannedDate = '2025-04-17';
+      expect(validateFullBalanceReportCheckpoint(input).margin.rows[0]
+        .finalSettlementOrPlannedDate).toBe('2025-04-17');
+    },
+  );
+
+  it.each([
+    [null, null, null],
+    ['1', '2', '-3'],
+  ])('accepts settled source semantics with nullable reported valuation cells',
+    (currentPrice, fees, unrealizedPnl) => {
+      const input = structuredClone(validCheckpoint);
+      input.margin.rows[0] = {
+        ...input.margin.rows[0],
+        state: 'settled',
+        currentPrice,
+        fees,
+        unrealizedPnl,
+        finalSettlementOrPlannedDate: '2025-04-18',
+      } as any;
+      expect(validateFullBalanceReportCheckpoint(input).margin.rows[0]).toEqual(input.margin.rows[0]);
+    });
 
   it.each(['masked', 'absent'] as const)(
     'accepts independently unavailable stock values marked %s without guessing',
@@ -281,32 +298,27 @@ describe('confirmed full SBI balance-report checkpoint', () => {
     ['contract after statement', (value: any) => {
       value.margin.rows[0].contractDate = '2025-04-19';
     }],
-    ['open due before statement', (value: any) => {
-      value.margin.rows[0].finalRepaymentDueDate = '2025-04-17';
+    ['final settlement before contract', (value: any) => {
+      value.margin.rows[0].finalSettlementOrPlannedDate = '2025-03-02';
     }],
-    ['open missing due date', (value: any) => {
-      value.margin.rows[0].finalRepaymentDueDate = null;
+    ['open missing final settlement or planned date', (value: any) => {
+      value.margin.rows[0].finalSettlementOrPlannedDate = null;
     }],
-    ['open carrying settled date', (value: any) => {
-      value.margin.rows[0].settlementContractDate = '2025-04-17';
-    }],
-    ['settled missing settlement date', (value: any) => {
+    ['unknown margin state', (value: any) => {
       value.margin.rows[0].state = 'settled_pending_delivery';
-      value.margin.rows[0].finalRepaymentDueDate = null;
     }],
-    ['settled carrying repayment due date', (value: any) => {
-      value.margin.rows[0].state = 'settled_pending_delivery';
-      value.margin.rows[0].settlementContractDate = '2025-04-16';
+    ['missing repayment term source label', (value: any) => {
+      delete value.margin.rows[0].repaymentTermLabel;
     }],
-    ['settlement before contract', (value: any) => {
-      value.margin.rows[0].state = 'settled_pending_delivery';
-      value.margin.rows[0].finalRepaymentDueDate = null;
-      value.margin.rows[0].settlementContractDate = '2025-03-02';
+    ['empty repayment term source label', (value: any) => {
+      value.margin.rows[0].repaymentTermLabel = '';
     }],
-    ['settlement after statement', (value: any) => {
-      value.margin.rows[0].state = 'settled_pending_delivery';
-      value.margin.rows[0].finalRepaymentDueDate = null;
-      value.margin.rows[0].settlementContractDate = '2025-04-19';
+    ['oversized designation source label', (value: any) => {
+      value.margin.rows[0].designationLabel = 'x'.repeat(51);
+    }],
+    ['settled missing final settlement date', (value: any) => {
+      value.margin.rows[0].state = 'settled';
+      value.margin.rows[0].finalSettlementOrPlannedDate = null;
     }],
     ['invented fund acquisition date', (value: any) => {
       value.fundBalances.rows[0].acquisitionDate = '2024-01-01';

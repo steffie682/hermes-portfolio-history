@@ -116,11 +116,11 @@ describe('full balance report checkpoint API v2', () => {
       })) },
       margin: { evidenceState: 'reported', zeroLocator: null, rows: rows((index) => ({
         state: 'open', securityCode: `${3000 + index}`, securityName: name,
+        repaymentTermLabel: 'x'.repeat(50), designationLabel: 'x'.repeat(50),
         quantity: '999999999999999999.999999', market: 'sapporo', side: 'sell',
         contractDate: '2026-06-15', contractUnitPrice: '999999999999999999.999999',
         currentPrice: '999999999999999999.999999', fees: '999999999999999999.99',
-        unrealizedPnl: '-999999999999999999.99', finalRepaymentDueDate: '9999-12-31',
-        settlementContractDate: null,
+        unrealizedPnl: '-999999999999999999.99', finalSettlementOrPlannedDate: '9999-12-31',
       })) },
       futures: { evidenceState: 'explicit_zero', zeroLocator: located(), rows: [] },
       options: { evidenceState: 'explicit_zero', zeroLocator: located(), rows: [] },

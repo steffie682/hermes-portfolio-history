@@ -44,8 +44,8 @@ CREATE TABLE "full_balance_report_checkpoints" (
       "collateral_count" BETWEEN 0 AND 100 AND
       "domestic_stock_lot_count" BETWEEN 0 AND 100 AND
       "fund_balance_count" BETWEEN 0 AND 100 AND
-      "margin_count" BETWEEN 0 AND 100)
-	,CONSTRAINT "full_balance_report_checkpoints_source_page_count_check" CHECK ("source_page_count" BETWEEN 1 AND 100)
+      "margin_count" BETWEEN 0 AND 100),
+	CONSTRAINT "full_balance_report_checkpoints_source_page_count_check" CHECK ("source_page_count" BETWEEN 1 AND 100)
 );
 --> statement-breakpoint
 ALTER TABLE "full_balance_report_checkpoints" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
@@ -102,6 +102,8 @@ CREATE TABLE "full_balance_report_margin_rows" (
 	"state" text NOT NULL,
 	"security_code" text NOT NULL,
 	"security_name" text NOT NULL,
+	"repayment_term_label" text NOT NULL,
+	"designation_label" text,
 	"quantity" numeric(24,6) NOT NULL,
 	"market" text NOT NULL,
 	"side" text NOT NULL,
@@ -110,19 +112,20 @@ CREATE TABLE "full_balance_report_margin_rows" (
 	"current_price" numeric(24,6),
 	"fees" numeric(20,2),
 	"unrealized_pnl" numeric(20,2),
-	"final_repayment_due_date" date,
-	"settlement_contract_date" date,
+	"final_settlement_or_planned_date" date NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "full_balance_report_margin_rows_bounds_check" CHECK ("row_index" BETWEEN 1 AND 100),
 	CONSTRAINT "full_balance_report_margin_rows_code_check" CHECK ("security_code" ~ '^(?:[0-9][0-9A-HJ-NP-UW-Y][0-9][0-9A-HJ-NP-UW-Y]|[0-9]{3}\.[0-9]{2})$'),
 	CONSTRAINT "full_balance_report_margin_rows_values_check" CHECK (
       char_length("security_name") BETWEEN 1 AND 100 AND
+      char_length("repayment_term_label") BETWEEN 1 AND 50 AND
+      ("designation_label" IS NULL OR char_length("designation_label") BETWEEN 1 AND 50) AND
       "market" IN ('tokyo','private','nagoya','fukuoka','sapporo') AND
       "quantity" > 0 AND "contract_unit_price" > 0 AND "side" IN ('buy', 'sell') AND
       ("current_price" IS NULL OR "current_price" > 0) AND
       ("fees" IS NULL OR "fees" >= 0) AND
-      "state" = 'open' AND "final_repayment_due_date" IS NOT NULL AND
-      "settlement_contract_date" IS NULL AND "final_repayment_due_date" >= "contract_date"),
+      "state" IN ('open', 'settled') AND
+      "final_settlement_or_planned_date" >= "contract_date"),
 	CONSTRAINT "full_balance_report_margin_rows_section_check" CHECK ("section_kind" = 'margin')
 );
 --> statement-breakpoint
@@ -246,9 +249,7 @@ BEGIN
     WHERE r.checkpoint_id = checkpoint AND r.acquisition_date > parent.statement_date
     UNION ALL
     SELECT 1 FROM public.full_balance_report_margin_rows r
-    WHERE r.checkpoint_id = checkpoint AND (
-      r.contract_date > parent.statement_date OR
-      r.final_repayment_due_date < parent.statement_date)
+    WHERE r.checkpoint_id = checkpoint AND r.contract_date > parent.statement_date
   ) THEN RAISE EXCEPTION 'typed row date contradicts statement evidence'; END IF;
 
   IF (SELECT count(*) FROM public.full_balance_report_sections WHERE checkpoint_id = checkpoint) <> 7

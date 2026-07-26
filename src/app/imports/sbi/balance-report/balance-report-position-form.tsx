@@ -25,16 +25,17 @@ const empty = {
     referencePriceUnit: '', sourcePage: '', sourceRow: '',
   }),
   margin: (): Draft => ({
-    state: 'open', securityCode: '', securityName: '', quantity: '', market: 'tokyo',
-    side: 'buy', contractDate: '', contractUnitPrice: '', currentPrice: '', fees: '',
-    unrealizedPnl: '', finalRepaymentDueDate: '', settlementContractDate: '',
+    state: 'open', securityCode: '', securityName: '', repaymentTermLabel: '',
+    designationLabel: '', quantity: '', market: 'tokyo', side: 'buy', contractDate: '',
+    contractUnitPrice: '', currentPrice: '', fees: '',
+    unrealizedPnl: '', finalSettlementOrPlannedDate: '',
     sourcePage: '', sourceRow: '',
   }),
 };
 const titles: Record<SectionName, string> = {
   deposits: '預り金・現金残高', collateral: '担保・保証金残高',
   domesticStockLots: '国内株式の取得明細', fundBalances: '自動積立・投資信託残高',
-  margin: '信用取引残高',
+  margin: '信用取引の建玉残高',
 };
 
 function Field({ row, name, label, type = 'text', required = true, max, onChange }: {
@@ -90,7 +91,16 @@ function RowFields({ section, row, sourcePageCount, change }: {
     <Field row={row} name="evaluationAmount" label="評価額" onChange={change} />
     <p>報告書にない取得日・取得価額は入力しません。</p></>;
   return <>{locator}
+    <p>原本列「銘柄名（弁済期限）」を、銘柄名と弁済期限に分けて入力します。</p>
+    <p>原本列「数量・市場」を、数量と市場に分けて入力します。</p>
+    <p>原本列「区分」を、売買と決済状態に分けて入力します。</p>
     {security}
+    <Field row={row} name="repaymentTermLabel" label="弁済期限（原本表記）" onChange={change} />
+    <Field row={row} name="designationLabel" label="指定表示（記載がある場合）" required={false} onChange={change} />
+    <label>状態<select value={row.state} onChange={(e) => change('state', e.currentTarget.value)}>
+      <option value="open">未決済</option>
+      <option value="settled">決済ずみ</option>
+    </select></label>
     <label>市場<select value={row.market} onChange={(e) => change('market', e.currentTarget.value)}>
       <option value="tokyo">東京</option><option value="private">私設取引システム</option>
       <option value="nagoya">名古屋</option><option value="fukuoka">福岡</option>
@@ -99,12 +109,14 @@ function RowFields({ section, row, sourcePageCount, change }: {
     <label>売買<select value={row.side} onChange={(e) => change('side', e.currentTarget.value)}>
       <option value="buy">買</option><option value="sell">売</option></select></label>
     <Field row={row} name="quantity" label="数量" onChange={change} />
-    <Field row={row} name="contractDate" label="約定日" type="date" onChange={change} />
+    <Field row={row} name="contractDate" label="約定年月日" type="date" onChange={change} />
     <Field row={row} name="contractUnitPrice" label="約定単価" onChange={change} />
-    <Field row={row} name="currentPrice" label="現在値（記載がある場合）" required={false} onChange={change} />
-    <Field row={row} name="fees" label="諸経費（記載がある場合）" required={false} onChange={change} />
+    <Field row={row} name="currentPrice" label="作成基準日現在の時価（記載がある場合）" required={false} onChange={change} />
+    <Field row={row} name="fees" label="手数料その他経費（記載がある場合）" required={false} onChange={change} />
     <Field row={row} name="unrealizedPnl" label="評価損益（記載がある場合）" required={false} onChange={change} />
-    <Field row={row} name="finalRepaymentDueDate" label="最終返済期日" type="date" onChange={change} /></>;
+    <p>原本が空欄の項目は、値を推測せず空欄のまま保存します。</p>
+    <Field row={row} name="finalSettlementOrPlannedDate"
+      label="最終決済期日または決済予定日" type="date" onChange={change} /></>;
 }
 
 export default function BalanceReportPositionForm({ accounts, sourcePageCount }: {
@@ -155,7 +167,7 @@ export default function BalanceReportPositionForm({ accounts, sourcePageCount }:
           onChange={() => changed(() => { setModes((v) => ({ ...v, [name]: 'rows' })); setRows((v) => ({ ...v, [name]: v[name].length ? v[name] : [empty[name]()] })); })} />
           原本記載の明細を入力する</label>
         {name === 'domesticStockLots' ? <p>取得明細だけを入力し、括弧付きの銘柄別合計行は二重計上になるため入力しません。</p> : null}
-        {name === 'margin' ? <p>決済済み・受渡前の行を含む報告書は、原本の列を正確に扱えるようになるまで保存できません。</p> : null}
+        {name === 'margin' ? <p>区分欄に従い、未決済または決済ずみを明細ごとに選択してください。</p> : null}
         {modes[name] === 'zero' ? <>
           <Field row={zeroLocators[name]} name="sourcePage" label={`${titles[name]}の0記載ページ`}
             type="number" max={sourcePageCount} onChange={(field, value) => changed(() =>
@@ -204,16 +216,12 @@ export default function BalanceReportPositionForm({ accounts, sourcePageCount }:
         const result: Record<string, unknown> = { ...row,
           sourcePage: Number(row.sourcePage), sourceRow: Number(row.sourceRow) };
         for (const key of ['referencePrice', 'evaluationAmount', 'referencePriceUnit', 'currentPrice',
-          'fees', 'unrealizedPnl', 'finalRepaymentDueDate', 'settlementContractDate']) {
+          'fees', 'unrealizedPnl', 'designationLabel']) {
           if (key in result && result[key] === '') result[key] = null;
         }
         if (name === 'domesticStockLots') {
           if (row.acquisitionUnitPriceState !== 'reported') result.acquisitionUnitPrice = null;
           if (row.purchaseAmountState !== 'reported') result.purchaseAmount = null;
-        }
-        if (name === 'margin') {
-          result.finalRepaymentDueDate = row.finalRepaymentDueDate;
-          result.settlementContractDate = null;
         }
         return result;
       }),
