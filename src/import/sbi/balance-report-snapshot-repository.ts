@@ -29,6 +29,11 @@ const internalSelection = {
   positionCount: balanceReportSnapshots.positionCount,
 };
 
+const mergeSelection = {
+  ...internalSelection,
+  createdAt: balanceReportSnapshots.createdAt,
+};
+
 export function createBalanceReportSnapshotRepository(db: AppDatabase) {
   return {
     async save(
@@ -105,6 +110,19 @@ export function createBalanceReportSnapshotRepository(db: AppDatabase) {
         await tx.execute(sql`select set_config('app.current_user_id', ${ownerUserId}, true)`);
         return tx
           .select(internalSelection)
+          .from(balanceReportSnapshots)
+          .where(eq(balanceReportSnapshots.ownerUserId, ownerUserId))
+          .orderBy(desc(balanceReportSnapshots.createdAt))
+          .limit(Math.min(Math.max(limit, 1), 20));
+      });
+    },
+
+    async listRecentForMerge(principal: AuthenticatedPrincipal, limit = 10) {
+      const ownerUserId = authenticatedPrincipalId(principal);
+      return db.transaction(async (tx) => {
+        await tx.execute(sql`select set_config('app.current_user_id', ${ownerUserId}, true)`);
+        return tx
+          .select(mergeSelection)
           .from(balanceReportSnapshots)
           .where(eq(balanceReportSnapshots.ownerUserId, ownerUserId))
           .orderBy(desc(balanceReportSnapshots.createdAt))

@@ -79,12 +79,13 @@ describe('initial migration', () => {
   });
 
   it('adds append-only tenant-isolated balance report evidence', () => {
-    const latestDirectory = readdirSync('drizzle', { withFileTypes: true })
+    const snapshotDirectory = readdirSync('drizzle', { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort()
-      .at(-1);
-    const sql = readFileSync(`drizzle/${latestDirectory}/migration.sql`, 'utf8');
+      .find((directory) => readFileSync(`drizzle/${directory}/migration.sql`, 'utf8')
+        .includes('CREATE TABLE "balance_report_snapshots"'));
+    const sql = readFileSync(`drizzle/${snapshotDirectory}/migration.sql`, 'utf8');
     for (const table of ['balance_report_snapshots', 'balance_report_positions']) {
       expect(sql).toContain(`ALTER TABLE "${table}" FORCE ROW LEVEL SECURITY;`);
       expect(sql).toContain(`REVOKE ALL ON "${table}" FROM PUBLIC;`);
@@ -104,6 +105,177 @@ describe('initial migration', () => {
       'CONSTRAINT "balance_report_snapshots_position_count_check" CHECK ("position_count" BETWEEN 0 AND 100)',
     );
     expect(sql).not.toMatch(/balance_report_snapshots_purpose_check|["]purpose["]/);
+  });
+
+  it('adds the forward-only normalized full checkpoint with narrow append-only access', () => {
+    const latestDirectory = readdirSync('drizzle', { withFileTypes: true })
+      .filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort().at(-1);
+    const sql = readFileSync(`drizzle/${latestDirectory}/migration.sql`, 'utf8');
+    const tables = [
+      'full_balance_report_checkpoints', 'full_balance_report_sections',
+      'full_balance_report_entries', 'full_balance_report_cash_rows',
+      'full_balance_report_stock_lots', 'full_balance_report_fund_balances',
+      'full_balance_report_margin_rows',
+    ];
+    for (const table of tables) {
+      expect(sql).toContain(`'${table}'`);
+      expect(sql).toContain(`${table}_owner_select`);
+      expect(sql).toContain(`${table}_owner_insert`);
+    }
+    expect(sql).toContain("EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', table_name)");
+    expect(sql).toContain("BEFORE UPDATE OR DELETE ON public.%I");
+    expect(sql).toContain("REVOKE ALL ON %I FROM PUBLIC");
+    expect(sql).toContain("rolname = 'portfolio_app'");
+    expect(sql).toContain("GRANT SELECT, INSERT ON %I TO portfolio_app");
+    expect(sql).not.toMatch(/GRANT [^;]*(?:UPDATE|DELETE)[^;]*full_balance_report_/);
+    expect(sql).not.toMatch(/\bjsonb?\b/i);
+    const indexes = [
+      'CREATE UNIQUE INDEX "full_balance_report_checkpoints_owner_account_id_uidx" ON "full_balance_report_checkpoints" ("owner_user_id","broker_account_id","id")',
+      'CREATE UNIQUE INDEX "full_balance_report_checkpoints_owner_fingerprint_uidx" ON "full_balance_report_checkpoints" ("owner_user_id","fingerprint")',
+      'CREATE UNIQUE INDEX "full_balance_report_sections_identity_uidx" ON "full_balance_report_sections" ("owner_user_id","broker_account_id","checkpoint_id","section_kind")',
+      'CREATE UNIQUE INDEX "full_balance_report_entries_owner_account_checkpoint_entry_uidx" ON "full_balance_report_entries" ("owner_user_id","broker_account_id","checkpoint_id","section_kind","row_index","id")',
+      'CREATE UNIQUE INDEX "full_balance_report_entries_checkpoint_locator_uidx" ON "full_balance_report_entries" ("checkpoint_id","source_page","source_row")',
+      'CREATE UNIQUE INDEX "full_balance_report_entries_checkpoint_section_index_uidx" ON "full_balance_report_entries" ("checkpoint_id","section_kind","row_index")',
+      'CREATE UNIQUE INDEX "full_balance_report_cash_rows_checkpoint_index_uidx" ON "full_balance_report_cash_rows" ("checkpoint_id","section_kind","row_index")',
+      'CREATE UNIQUE INDEX "full_balance_report_stock_lots_checkpoint_index_uidx" ON "full_balance_report_stock_lots" ("checkpoint_id","section_kind","row_index")',
+      'CREATE UNIQUE INDEX "full_balance_report_fund_balances_checkpoint_index_uidx" ON "full_balance_report_fund_balances" ("checkpoint_id","section_kind","row_index")',
+      'CREATE UNIQUE INDEX "full_balance_report_margin_rows_checkpoint_index_uidx" ON "full_balance_report_margin_rows" ("checkpoint_id","section_kind","row_index")',
+    ];
+    for (const indexSql of indexes) expect(sql).toContain(indexSql);
+    expect(sql).toContain('"source_page_count" integer NOT NULL');
+    expect(sql).toContain('"source_page_count" BETWEEN 1 AND 100');
+    expect(sql).toContain('"acquisition_unit_price_state" text NOT NULL');
+    expect(sql).toContain('"purchase_amount_state" text NOT NULL');
+    expect(sql).not.toContain('"cost_value_state"');
+    expect(sql).toContain('"final_settlement_or_planned_date" date NOT NULL');
+    expect(sql).toContain('"repayment_term_label" text NOT NULL');
+    expect(sql).toContain('"designation_label" text');
+    expect(sql).not.toMatch(/final_repayment_due_date|settlement_contract_date/);
+    expect(sql).not.toContain('r.final_settlement_or_planned_date < parent.statement_date');
+    expect(sql).toContain('FOREIGN KEY ("owner_user_id","broker_account_id","checkpoint_id","section_kind","row_index","entry_id")');
+    expect(sql).toContain("SET search_path = pg_catalog, public");
+    expect(sql).toContain('REVOKE ALL ON FUNCTION public.full_balance_report_reject_mutation() FROM PUBLIC');
+    expect(sql).toContain('REVOKE ALL ON FUNCTION public.full_balance_report_validate_checkpoint() FROM PUBLIC');
+    expect(sql).toContain('CREATE CONSTRAINT TRIGGER full_balance_report_checkpoint_complete');
+  });
+
+  it('enforces exact margin state, date, and source-label constraints through direct SQL', async () => {
+    const db = new PGlite();
+    try {
+      await applyAllMigrations(db);
+      const insert = (values: string) => db.exec(`
+        insert into full_balance_report_margin_rows (
+          owner_user_id, broker_account_id, checkpoint_id, entry_id, section_kind, row_index,
+          state, security_code, security_name, repayment_term_label, designation_label,
+          quantity, market, side, contract_date, contract_unit_price, current_price, fees, unrealized_pnl,
+          final_settlement_or_planned_date
+        ) values (${values})
+      `);
+      const common = `
+        'synthetic', '00000000-0000-4000-8000-000000000001',
+        '10000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001',
+        'margin', 1`;
+      await db.exec(`
+        begin;
+        insert into "user" (id, name) values ('synthetic', 'Synthetic');
+        insert into broker_accounts (id, owner_user_id, broker, display_name)
+        values ('00000000-0000-4000-8000-000000000001', 'synthetic', 'sbi', 'Synthetic');
+        insert into full_balance_report_checkpoints (
+          id, owner_user_id, broker_account_id, statement_date, source_page_count, fingerprint,
+          generic_as_of, manually_confirmed, all_relevant_pages_reviewed, fingerprint_version,
+          deposit_count, collateral_count, domestic_stock_lot_count, fund_balance_count, margin_count
+        ) values (
+          '10000000-0000-4000-8000-000000000001', 'synthetic',
+          '00000000-0000-4000-8000-000000000001', '2026-06-15', 1, repeat('a', 64),
+          true, true, true, 2, 0, 0, 0, 0, 1
+        );
+        insert into full_balance_report_sections
+          (owner_user_id, broker_account_id, checkpoint_id, section_kind, evidence_state, declared_count)
+        select 'synthetic', '00000000-0000-4000-8000-000000000001',
+          '10000000-0000-4000-8000-000000000001', kind,
+          case when kind = 'margin' then 'reported' else 'explicit_zero' end,
+          case when kind = 'margin' then 1 else 0 end
+        from unnest(array['deposits','collateral','domesticStockLots','fundBalances','margin','futures','options']) kind;
+        insert into full_balance_report_entries
+          (owner_user_id, broker_account_id, checkpoint_id, section_kind, entry_kind,
+           row_index, source_page, source_row)
+        select 'synthetic', '00000000-0000-4000-8000-000000000001',
+          '10000000-0000-4000-8000-000000000001', kind, 'zero', null, 1, ordinal
+        from unnest(array['deposits','collateral','domesticStockLots','fundBalances','futures','options'])
+          with ordinality as section(kind, ordinal);
+        insert into full_balance_report_entries (
+          id, owner_user_id, broker_account_id, checkpoint_id, section_kind, entry_kind,
+          row_index, source_page, source_row
+        ) values (
+          '20000000-0000-4000-8000-000000000001', 'synthetic',
+          '00000000-0000-4000-8000-000000000001',
+          '10000000-0000-4000-8000-000000000001', 'margin', 'row', 1, 1, 7
+        );
+        insert into full_balance_report_margin_rows (
+          owner_user_id, broker_account_id, checkpoint_id, entry_id, section_kind, row_index,
+          state, security_code, security_name, repayment_term_label, designation_label,
+          quantity, market, side, contract_date, contract_unit_price, current_price, fees,
+          unrealized_pnl, final_settlement_or_planned_date
+        ) values (
+          ${common}, 'open', '3579', 'Synthetic', 'Term', null, 1, 'tokyo', 'buy',
+          '2026-06-01', 1, null, null, null, '2026-06-16'
+        );
+        commit;
+      `);
+      expect((await db.query<{ state: string }>(
+        `select state from full_balance_report_margin_rows`,
+      )).rows).toEqual([{ state: 'open' }]);
+      const check = /full_balance_report_margin_rows_values_check/;
+      await expect(insert(`${common}, 'closed', '3579', 'Synthetic', 'Term', null, 1, 'tokyo', 'buy',
+        '2026-06-01', 1, null, null, null, '2026-06-16'`)).rejects.toThrow(check);
+      await expect(insert(`${common}, 'open', '3579', 'Synthetic', 'Term', null, 1, 'tokyo', 'buy',
+        '2026-06-02', 1, null, null, null, '2026-06-01'`)).rejects.toThrow(check);
+      await expect(insert(`${common}, 'open', '3579', 'Synthetic', '', null, 1, 'tokyo', 'buy',
+        '2026-06-01', 1, null, null, null, '2026-06-16'`)).rejects.toThrow(check);
+      await expect(insert(`${common}, 'open', '3579', 'Synthetic', 'Term', repeat('x', 51), 1,
+        'tokyo', 'buy', '2026-06-01', 1, null, null, null, '2026-06-16'`)).rejects.toThrow(check);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('enforces v2 evidence invariants through direct SQL at deferred completion', async () => {
+    const db = new PGlite();
+    try {
+      await applyAllMigrations(db);
+      await db.exec(`
+        insert into "user" (id, name) values ('v2-synthetic', 'Synthetic');
+        insert into broker_accounts (id, owner_user_id, broker, display_name)
+        values ('00000000-0000-4000-8000-000000000091', 'v2-synthetic', 'sbi', 'Synthetic');
+      `);
+      await expect(db.exec(`
+        begin;
+        insert into full_balance_report_checkpoints (
+          id, owner_user_id, broker_account_id, statement_date, source_page_count,
+          fingerprint, generic_as_of, manually_confirmed, all_relevant_pages_reviewed,
+          fingerprint_version, deposit_count, collateral_count, domestic_stock_lot_count,
+          fund_balance_count, margin_count
+        ) values (
+          '10000000-0000-4000-8000-000000000091', 'v2-synthetic',
+          '00000000-0000-4000-8000-000000000091', '2026-06-15', 1,
+          repeat('a', 64), true, true, true, 2, 0, 0, 0, 0, 0
+        );
+        insert into full_balance_report_sections
+          (owner_user_id, broker_account_id, checkpoint_id, section_kind, evidence_state, declared_count)
+        select 'v2-synthetic', '00000000-0000-4000-8000-000000000091',
+          '10000000-0000-4000-8000-000000000091', kind, 'explicit_zero', 0
+        from unnest(array['deposits','collateral','domesticStockLots','fundBalances','margin','futures','options']) kind;
+        insert into full_balance_report_entries
+          (owner_user_id, broker_account_id, checkpoint_id, section_kind, entry_kind, row_index, source_page, source_row)
+        select 'v2-synthetic', '00000000-0000-4000-8000-000000000091',
+          '10000000-0000-4000-8000-000000000091', kind, 'zero', null, 2, ordinal
+        from unnest(array['deposits','collateral','domesticStockLots','fundBalances','margin','futures','options'])
+          with ordinality as section(kind, ordinal);
+        commit;
+      `)).rejects.toThrow();
+    } finally {
+      await db.close();
+    }
   });
 
   it('applies the zero-position snapshot constraint from the newest migration', async () => {

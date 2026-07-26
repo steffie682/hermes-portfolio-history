@@ -67,6 +67,8 @@ export default function SbiBalanceReportClient({
   const activeInspection = useRef<AbortController | null>(null);
   const retainedPdfBytes = useRef<Uint8Array | null>(null);
   const [report, setReport] = useState<SafeReport | null>(null);
+  const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
+  const [reportGeneration, setReportGeneration] = useState(0);
   const [ocrPageCount, setOcrPageCount] = useState<number | null>(null);
   const [startPage, setStartPage] = useState(1);
   const [endPage, setEndPage] = useState(1);
@@ -95,6 +97,7 @@ export default function SbiBalanceReportClient({
     const version = ++operationVersion.current;
     const file = event.currentTarget.files?.[0];
     setReport(null);
+    setPdfPageCount(null);
     setOcrPageCount(null);
     setOcrRunning(false);
     setOcrProgress({ completed: 0, total: 0 });
@@ -131,6 +134,7 @@ export default function SbiBalanceReportClient({
         releaseBytes(inspectionBytes);
       }
       if (version !== operationVersion.current) return;
+      setPdfPageCount(nextReport.pageCount);
       const needsOcr = nextReport.pages.length > 0
         && nextReport.pages.every((page) =>
           page.extractionMode === 'none' && page.items.length === 0);
@@ -142,6 +146,7 @@ export default function SbiBalanceReportClient({
         setStatus(`自動抽出できませんでした。PDF ${nextReport.pageCount}ページ`);
       } else {
         setReport(nextReport);
+        setReportGeneration(version);
         setStatus(`PDF ${nextReport.pageCount}ページ`);
         wipeRetainedBytes();
         bytes = null;
@@ -150,6 +155,7 @@ export default function SbiBalanceReportClient({
       if (version !== operationVersion.current) return;
       wipeRetainedBytes();
       setReport(null);
+      setPdfPageCount(null);
       setOcrPageCount(null);
       setStatus('');
       setError('PDFを確認できませんでした。SBIの取引残高報告書PDFを選び直してください。');
@@ -195,6 +201,7 @@ export default function SbiBalanceReportClient({
         page.items.some((item) => item.kind === 'known-label'));
       if (!hasKnownLabel) throw new Error('ocr-known-label-required');
       setReport(nextReport);
+      setReportGeneration(version);
       setOcrPageCount(null);
       setStatus(`OCRが完了しました（${range.endPage - range.startPage + 1}ページ）`);
     } catch (ocrError) {
@@ -221,6 +228,7 @@ export default function SbiBalanceReportClient({
     activeInspection.current = null;
     wipeRetainedBytes();
     setReport(null);
+    setPdfPageCount(null);
     setOcrPageCount(null);
     setOcrRunning(false);
     setOcrProgress({ completed: 0, total: 0 });
@@ -248,7 +256,7 @@ export default function SbiBalanceReportClient({
           <ul>
             {recentSnapshots.map((snapshot) => (
               <li key={snapshot.id}>
-                {snapshot.statementDate}・{snapshot.positionCount}件
+                {snapshot.statementDate}・明細{snapshot.rowCount ?? snapshot.positionCount ?? 0}件
               </li>
             ))}
           </ul>
@@ -308,8 +316,9 @@ export default function SbiBalanceReportClient({
       ) : null}
       {report ? (
         <>
-        {accounts.length > 0 && isBalanceReport
-          ? <BalanceReportPositionForm accounts={accounts} />
+        {accounts.length > 0 && isBalanceReport && pdfPageCount !== null
+          ? <BalanceReportPositionForm key={reportGeneration} accounts={accounts}
+              sourcePageCount={pdfPageCount} />
           : accounts.length > 0 ? (
             <div className="import-error" role="alert">
               取引残高報告書を確認できないため、このPDFからチェックポイントを保存できません。
