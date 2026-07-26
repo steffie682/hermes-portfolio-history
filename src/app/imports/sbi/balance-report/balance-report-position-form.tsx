@@ -1,216 +1,304 @@
 'use client';
 
-import { useRef, useState, type FormEvent } from 'react';
+import { Fragment, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 
 export type BalanceReportAccountSummary = { id: string; displayName: string };
 export type SavedSnapshotSummary = {
-  id: string;
-  statementDate: string;
-  positionCount: number;
+  id: string; statementDate: string; rowCount?: number; positionCount?: number;
 };
-type PositionDraft = {
-  sourcePage: string; sourceRow: string; side: 'buy' | 'sell'; securityCode: string; securityName: string;
-  quantity: string; unitPriceYen: string; openedOn: string; dueOn: string;
+type Mode = '' | 'zero' | 'rows';
+type Draft = Record<string, string>;
+type SectionName = 'deposits' | 'collateral' | 'domesticStockLots' | 'fundBalances' | 'margin';
+
+const empty = {
+  deposits: (): Draft => ({ kind: 'cash_deposit', amount: '', sourcePage: '', sourceRow: '' }),
+  collateral: (): Draft => ({ kind: 'margin_guarantee', amount: '', sourcePage: '', sourceRow: '' }),
+  domesticStockLots: (): Draft => ({
+    securityCode: '', securityName: '', acquisitionDate: '', quantity: '',
+    rowKind: 'acquisition_lot',
+    acquisitionUnitPriceState: 'reported', acquisitionUnitPrice: '',
+    purchaseAmountState: 'reported', purchaseAmount: '',
+    referencePrice: '', evaluationAmount: '', sourcePage: '', sourceRow: '',
+  }),
+  fundBalances: (): Draft => ({
+    securityCode: '', securityName: '', units: '', referencePrice: '', evaluationAmount: '',
+    referencePriceUnit: '', sourcePage: '', sourceRow: '',
+  }),
+  margin: (): Draft => ({
+    state: 'open', securityCode: '', securityName: '', quantity: '', market: 'tokyo',
+    side: 'buy', contractDate: '', contractUnitPrice: '', currentPrice: '', fees: '',
+    unrealizedPnl: '', finalRepaymentDueDate: '', settlementContractDate: '',
+    sourcePage: '', sourceRow: '',
+  }),
+};
+const titles: Record<SectionName, string> = {
+  deposits: '預り金・現金残高', collateral: '担保・保証金残高',
+  domesticStockLots: '国内株式の取得明細', fundBalances: '自動積立・投資信託残高',
+  margin: '信用取引残高',
 };
 
-const emptyPosition = (): PositionDraft => ({
-  sourcePage: '1', sourceRow: '1', side: 'buy', securityCode: '', securityName: '',
-  quantity: '', unitPriceYen: '', openedOn: '', dueOn: '',
-});
+function Field({ row, name, label, type = 'text', required = true, max, onChange }: {
+  row: Draft; name: string; label: string; type?: string; required?: boolean; max?: number;
+  onChange(name: string, value: string): void;
+}) {
+  return <label>{label}<input type={type} required={required} max={max} value={row[name] ?? ''}
+    onChange={(event) => onChange(name, event.currentTarget.value)} /></label>;
+}
 
-export default function BalanceReportPositionForm({
-  accounts,
-}: {
+function RowFields({ section, row, sourcePageCount, change }: {
+  section: SectionName; row: Draft; sourcePageCount: number; change(name: string, value: string): void;
+}) {
+  const locator = <><Field row={row} name="sourcePage" label="元PDFのページ" type="number"
+    max={sourcePageCount} onChange={change} />
+    <Field row={row} name="sourceRow" label="ページ内の明細番号（上から）" type="number" onChange={change} /></>;
+  if (section === 'deposits' || section === 'collateral') return <>{locator}
+    <label>原本の種類<select value={row.kind} onChange={(e) => change('kind', e.currentTarget.value)}>
+      {(section === 'deposits'
+        ? [['cash_deposit', '預り金・現金']]
+        : [
+          ['margin_guarantee', '信用取引保証金'],
+          ['stock_lending_collateral', '貸株担保金'],
+          ['futures_options_margin', '先物・オプション取引証拠金'],
+        ]).map(([value, label]) =>
+          <option key={value} value={value}>{label}</option>)}
+    </select></label><Field row={row} name="amount" label="原本記載額" onChange={change} /></>;
+  const security = <><Field row={row} name="securityCode" label="銘柄コード" onChange={change} />
+    <Field row={row} name="securityName" label="銘柄名" onChange={change} /></>;
+  if (section === 'domesticStockLots') return <>{locator}{security}
+    <Field row={row} name="acquisitionDate" label="取得日" type="date" onChange={change} />
+    <Field row={row} name="quantity" label="数量" onChange={change} />
+    <label>取得単価の原本状態<select value={row.acquisitionUnitPriceState}
+      onChange={(e) => change('acquisitionUnitPriceState', e.currentTarget.value)}>
+      <option value="reported">記載あり</option><option value="masked">伏字</option><option value="absent">記載なし</option>
+    </select></label>
+    {row.acquisitionUnitPriceState === 'reported' ?
+      <Field row={row} name="acquisitionUnitPrice" label="取得単価" onChange={change} />
+      : <p>取得単価は推測せず保存します。</p>}
+    <label>買付金額の原本状態<select value={row.purchaseAmountState}
+      onChange={(e) => change('purchaseAmountState', e.currentTarget.value)}>
+      <option value="reported">記載あり</option><option value="masked">伏字</option><option value="absent">記載なし</option>
+    </select></label>
+    {row.purchaseAmountState === 'reported' ?
+      <Field row={row} name="purchaseAmount" label="買付金額" onChange={change} />
+      : <p>買付金額は推測せず保存します。</p>}
+    <Field row={row} name="referencePrice" label="参考価格（記載がある場合）" required={false} onChange={change} />
+    <Field row={row} name="evaluationAmount" label="評価額（記載がある場合）" required={false} onChange={change} /></>;
+  if (section === 'fundBalances') return <>{locator}{security}
+    <Field row={row} name="units" label="口数" onChange={change} />
+    <Field row={row} name="referencePrice" label="参考価格" onChange={change} />
+    <Field row={row} name="referencePriceUnit" label="参考価格の単位（記載がある場合）" required={false} onChange={change} />
+    <Field row={row} name="evaluationAmount" label="評価額" onChange={change} />
+    <p>報告書にない取得日・取得価額は入力しません。</p></>;
+  return <>{locator}
+    {security}
+    <label>市場<select value={row.market} onChange={(e) => change('market', e.currentTarget.value)}>
+      <option value="tokyo">東京</option><option value="private">私設取引システム</option>
+      <option value="nagoya">名古屋</option><option value="fukuoka">福岡</option>
+      <option value="sapporo">札幌</option>
+    </select></label>
+    <label>売買<select value={row.side} onChange={(e) => change('side', e.currentTarget.value)}>
+      <option value="buy">買</option><option value="sell">売</option></select></label>
+    <Field row={row} name="quantity" label="数量" onChange={change} />
+    <Field row={row} name="contractDate" label="約定日" type="date" onChange={change} />
+    <Field row={row} name="contractUnitPrice" label="約定単価" onChange={change} />
+    <Field row={row} name="currentPrice" label="現在値（記載がある場合）" required={false} onChange={change} />
+    <Field row={row} name="fees" label="諸経費（記載がある場合）" required={false} onChange={change} />
+    <Field row={row} name="unrealizedPnl" label="評価損益（記載がある場合）" required={false} onChange={change} />
+    <Field row={row} name="finalRepaymentDueDate" label="最終返済期日" type="date" onChange={change} /></>;
+}
+
+export default function BalanceReportPositionForm({ accounts, sourcePageCount }: {
   accounts: BalanceReportAccountSummary[];
+  sourcePageCount: number;
 }) {
   const [brokerAccountId, setBrokerAccountId] = useState(accounts[0]?.id ?? '');
   const [statementDate, setStatementDate] = useState('');
-  const [positions, setPositions] = useState<PositionDraft[]>([emptyPosition()]);
-  const [confirmed, setConfirmed] = useState(false);
-  const [confirmedNoPositions, setConfirmedNoPositions] = useState(false);
+  const [modes, setModes] = useState<Record<SectionName, Mode>>({
+    deposits: '', collateral: '', domesticStockLots: '', fundBalances: '', margin: '',
+  });
+  const [rows, setRows] = useState<Record<SectionName, Draft[]>>({
+    deposits: [], collateral: [], domesticStockLots: [], fundBalances: [], margin: [],
+  });
+  const [zeroLocators, setZeroLocators] = useState<Record<SectionName | 'futures' | 'options', Draft>>({
+    deposits: { sourcePage: '', sourceRow: '' },
+    collateral: { sourcePage: '', sourceRow: '' },
+    domesticStockLots: { sourcePage: '', sourceRow: '' },
+    fundBalances: { sourcePage: '', sourceRow: '' },
+    margin: { sourcePage: '', sourceRow: '' },
+    futures: { sourcePage: '', sourceRow: '' },
+    options: { sourcePage: '', sourceRow: '' },
+  });
+  const [futures, setFutures] = useState<'' | 'zero' | 'nonzero'>('');
+  const [options, setOptions] = useState<'' | 'zero' | 'nonzero'>('');
+  const [reviewed, setReviewed] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [saved, setSaved] = useState<SavedSnapshotSummary | null>(null);
+  const generation = useRef(0);
+  const activeSave = useRef<AbortController | null>(null);
   const saveInFlight = useRef(false);
-  const [saveMessage, setSaveMessage] = useState('');
-  const [savedSnapshot, setSavedSnapshot] = useState<SavedSnapshotSummary | null>(null);
+  useEffect(() => () => activeSave.current?.abort(), []);
 
-  function invalidateConfirmation() {
-    setConfirmed(false);
-    setSavedSnapshot(null);
-    setSaveMessage('');
+  function changed(action: () => void) {
+    generation.current += 1;
+    activeSave.current?.abort();
+    setReviewed(false); setSaved(null); setMessage('');
+    action();
+  }
+  function section(name: SectionName): ReactNode {
+    return <details><summary>{titles[name]}</summary>
+      <fieldset><legend>{titles[name]}の確認</legend>
+        <label><input type="radio" name={`${name}-mode`} checked={modes[name] === 'zero'}
+          onChange={() => changed(() => { setModes((v) => ({ ...v, [name]: 'zero' })); setRows((v) => ({ ...v, [name]: [] })); })} />
+          この欄は0と確認した</label>
+        <label><input type="radio" name={`${name}-mode`} checked={modes[name] === 'rows'}
+          onChange={() => changed(() => { setModes((v) => ({ ...v, [name]: 'rows' })); setRows((v) => ({ ...v, [name]: v[name].length ? v[name] : [empty[name]()] })); })} />
+          原本記載の明細を入力する</label>
+        {name === 'domesticStockLots' ? <p>取得明細だけを入力し、括弧付きの銘柄別合計行は二重計上になるため入力しません。</p> : null}
+        {name === 'margin' ? <p>決済済み・受渡前の行を含む報告書は、原本の列を正確に扱えるようになるまで保存できません。</p> : null}
+        {modes[name] === 'zero' ? <>
+          <Field row={zeroLocators[name]} name="sourcePage" label={`${titles[name]}の0記載ページ`}
+            type="number" max={sourcePageCount} onChange={(field, value) => changed(() =>
+              setZeroLocators((all) => ({ ...all, [name]: { ...all[name], [field]: value } })))} />
+          <Field row={zeroLocators[name]} name="sourceRow" label={`${titles[name]}の0記載行`}
+            type="number" onChange={(field, value) => changed(() =>
+              setZeroLocators((all) => ({ ...all, [name]: { ...all[name], [field]: value } })))} />
+        </> : null}
+        {modes[name] === 'rows' ? rows[name].map((row, index) => <fieldset key={index}>
+          <legend>{titles[name]} {index + 1}</legend>
+          <RowFields section={name} row={row} sourcePageCount={sourcePageCount}
+            change={(field, value) => changed(() =>
+            setRows((all) => ({ ...all, [name]: all[name].map((item, i) =>
+              i === index ? { ...item, [field]: value } : item) })))} />
+          <button type="button" onClick={() => changed(() => setRows((all) => ({
+            ...all, [name]: all[name].filter((_, i) => i !== index),
+          })))}>この明細を削除</button>
+          {index > 0 ? <button type="button" onClick={() => changed(() => setRows((all) => {
+            const next = [...all[name]]; [next[index - 1], next[index]] = [next[index], next[index - 1]];
+            return { ...all, [name]: next };
+          }))}>上へ移動</button> : null}
+        </fieldset>) : null}
+        {modes[name] === 'rows' && rows[name].length < 100 ? <button type="button"
+          onClick={() => changed(() => setRows((v) => ({ ...v, [name]: [...v[name], empty[name]()] })))}>
+          明細を追加</button> : null}
+      </fieldset>
+    </details>;
   }
 
-  function updatePosition(index: number, field: keyof PositionDraft, value: string) {
-    invalidateConfirmation();
-    setPositions((current) => current.map((position, positionIndex) =>
-      positionIndex === index ? { ...position, [field]: value } : position));
-  }
-
-  async function handleSave(event: FormEvent<HTMLFormElement>) {
+  async function save(event: FormEvent) {
     event.preventDefault();
-    if (saveInFlight.current || !confirmed || !brokerAccountId) return;
+    if (saveInFlight.current || !reviewed || futures !== 'zero' || options !== 'zero'
+      || Object.values(modes).some((mode) => !mode)) return;
     saveInFlight.current = true;
-    setSaving(true);
-    setSaveMessage('');
+    const requestGeneration = generation.current;
+    const controller = new AbortController();
+    activeSave.current?.abort(); activeSave.current = controller;
+    setSaving(true); setMessage('');
+    const sectionPayload = (name: SectionName) => ({
+      evidenceState: modes[name] === 'zero' ? 'explicit_zero' : 'reported',
+      zeroLocator: modes[name] === 'zero' ? {
+        sourcePage: Number(zeroLocators[name].sourcePage),
+        sourceRow: Number(zeroLocators[name].sourceRow),
+      } : null,
+      rows: modes[name] === 'zero' ? [] : rows[name].map((row) => {
+        const result: Record<string, unknown> = { ...row,
+          sourcePage: Number(row.sourcePage), sourceRow: Number(row.sourceRow) };
+        for (const key of ['referencePrice', 'evaluationAmount', 'referencePriceUnit', 'currentPrice',
+          'fees', 'unrealizedPnl', 'finalRepaymentDueDate', 'settlementContractDate']) {
+          if (key in result && result[key] === '') result[key] = null;
+        }
+        if (name === 'domesticStockLots') {
+          if (row.acquisitionUnitPriceState !== 'reported') result.acquisitionUnitPrice = null;
+          if (row.purchaseAmountState !== 'reported') result.purchaseAmount = null;
+        }
+        if (name === 'margin') {
+          result.finalRepaymentDueDate = row.finalRepaymentDueDate;
+          result.settlementContractDate = null;
+        }
+        return result;
+      }),
+    });
     try {
-      const response = await fetch('/api/imports/sbi/balance-report-snapshots', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
+      const response = await fetch('/api/imports/sbi/full-balance-report-checkpoints', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, signal: controller.signal,
         body: JSON.stringify({
-          brokerAccountId,
-          statementDate,
-          confirmedCompleteFromOriginal: true,
-          confirmedNoPositions,
-          positions: confirmedNoPositions ? [] : positions.map((position) => ({
-            sourcePage: Number(position.sourcePage),
-            sourceRow: Number(position.sourceRow),
-            side: position.side,
-            securityCode: position.securityCode,
-            securityName: position.securityName,
-            quantity: position.quantity,
-            unitPriceYen: position.unitPriceYen,
-            openedOn: position.openedOn,
-            dueOn: position.dueOn || null,
-          })),
+          brokerAccountId, statementDate, sourcePageCount, allRelevantPagesReviewed: true,
+          evidence: { kind: 'generic_as_of', confirmation: 'manual' },
+          deposits: sectionPayload('deposits'), collateral: sectionPayload('collateral'),
+          domesticStockLots: sectionPayload('domesticStockLots'), fundBalances: sectionPayload('fundBalances'),
+          margin: sectionPayload('margin'),
+          futures: {
+            evidenceState: 'explicit_zero',
+            zeroLocator: {
+              sourcePage: Number(zeroLocators.futures.sourcePage),
+              sourceRow: Number(zeroLocators.futures.sourceRow),
+            },
+            rows: [],
+          },
+          options: {
+            evidenceState: 'explicit_zero',
+            zeroLocator: {
+              sourcePage: Number(zeroLocators.options.sourcePage),
+              sourceRow: Number(zeroLocators.options.sourceRow),
+            },
+            rows: [],
+          },
         }),
       });
-      const result = await response.json() as {
-        snapshot?: SavedSnapshotSummary;
-        error?: { code?: string };
-      };
-      if (!response.ok || !result.snapshot) {
-        const messages: Record<string, string> = {
-          session_expired: 'セッションが切れました。再ログインしてください。',
-          invalid_origin: '安全確認に失敗しました。ページを再読み込みしてください。',
-          invalid_account: '選択したSBI口座を確認できませんでした。',
-          invalid_snapshot: '入力内容を確認してください。',
-          snapshot_unavailable: '現在保存できません。時間をおいてもう一度お試しください。',
-        };
-        setSaveMessage(messages[result.error?.code ?? ''] ?? '保存できませんでした。');
-        return;
+      const result = await response.json() as { checkpoint?: SavedSnapshotSummary; error?: { code?: string } };
+      if (requestGeneration !== generation.current || controller.signal.aborted) return;
+      if (!response.ok || !result.checkpoint) {
+        setMessage(result.error?.code === 'invalid_checkpoint' ? '入力内容を確認してください。'
+          : result.error?.code === 'invalid_account' ? '選択したSBI口座を確認できませんでした。'
+            : '現在保存できません。時間をおいてもう一度お試しください。');
+      } else {
+        setSaved(result.checkpoint);
+        setMessage(response.status === 200 ? '同じ確認内容はすでに保存されています。' : '確認した残高を保存しました。');
       }
-      setSavedSnapshot(result.snapshot);
-      setSaveMessage(response.status === 200
-        ? '同じ確認内容はすでに保存されています。'
-        : '本人確認した信用建玉を保存しました。');
     } catch {
-      setSaveMessage('保存できませんでした。通信状態を確認してください。');
+      if (requestGeneration === generation.current && !controller.signal.aborted) setMessage('保存できませんでした。通信状態を確認してください。');
     } finally {
       saveInFlight.current = false;
-      setSaving(false);
+      if (requestGeneration === generation.current) setSaving(false);
     }
   }
 
-  return (
-    <section className="safe-report-result" aria-labelledby="confirmed-positions-title">
-      <h2 id="confirmed-positions-title">次の手順：信用建玉を本人確認して保存</h2>
-      <p>
-        報告書基準日時点で取引残高報告書に表示された信用建玉を、
-        残高報告書チェックポイントとして保存します。
-      </p>
-      <p>
-        この保存は特定日時点の汎用チェックポイント証拠です。
-        信用台帳イベントを計上せず、資産残高を完成させません。
-      </p>
-      <p>
-        元の取引残高報告書を目で確認し、信用建玉を手入力してください。
-        OCRや構造レポートから値を推測しないでください。
-      </p>
-      <p>アプリは数量×建単価を計算せず、受渡金額も推測しません。</p>
-      <p>JSONは任意の診断用であり、保存ワークフローの出力ではありません。</p>
-      <form onSubmit={(event) => void handleSave(event)}>
-        <fieldset disabled={saving}>
-          <label htmlFor="snapshot-account">SBI口座</label>
-          <select id="snapshot-account" value={brokerAccountId}
-            onChange={(event) => {
-              invalidateConfirmation();
-              setBrokerAccountId(event.currentTarget.value);
-            }}>
-            {accounts.map((account) => <option key={account.id} value={account.id}>{account.displayName}</option>)}
-          </select>
-          <label htmlFor="snapshot-date">報告書基準日</label>
-          <input id="snapshot-date" type="date" required value={statementDate}
-            onChange={(event) => {
-              invalidateConfirmation();
-              setStatementDate(event.currentTarget.value);
-            }} />
-          <label>
-            <input type="checkbox" checked={confirmedNoPositions}
-              onChange={(event) => {
-                invalidateConfirmation();
-                setConfirmedNoPositions(event.currentTarget.checked);
-              }} />
-            報告書で信用建玉が0件であることを確認した
-          </label>
-          {!confirmedNoPositions ? positions.map((position, index) => (
-            <fieldset key={index}>
-              <legend>信用建玉 {index + 1}</legend>
-              <label htmlFor={`position-page-${index}`}>元PDFのページ</label>
-              <input id={`position-page-${index}`} type="number" min="1" max="100" required
-                value={position.sourcePage}
-                onChange={(event) => updatePosition(index, 'sourcePage', event.currentTarget.value)} />
-              <label htmlFor={`position-row-${index}`}>ページ内の明細番号（上から）</label>
-              <input id={`position-row-${index}`} type="number" min="1" max="100" required
-                value={position.sourceRow}
-                onChange={(event) => updatePosition(index, 'sourceRow', event.currentTarget.value)} />
-              <label htmlFor={`position-side-${index}`}>売買</label>
-              <select id={`position-side-${index}`} value={position.side}
-                onChange={(event) => updatePosition(index, 'side', event.currentTarget.value)}>
-                <option value="buy">買</option><option value="sell">売</option>
-              </select>
-              <label htmlFor={`position-code-${index}`}>銘柄コード</label>
-              <input id={`position-code-${index}`} required pattern="[A-Z0-9]{4}" maxLength={4}
-                value={position.securityCode}
-                onChange={(event) => updatePosition(index, 'securityCode', event.currentTarget.value)} />
-              <label htmlFor={`position-name-${index}`}>銘柄名</label>
-              <input id={`position-name-${index}`} required maxLength={100} value={position.securityName}
-                onChange={(event) => updatePosition(index, 'securityName', event.currentTarget.value)} />
-              <label htmlFor={`position-quantity-${index}`}>数量</label>
-              <input id={`position-quantity-${index}`} required inputMode="numeric" maxLength={18}
-                value={position.quantity}
-                onChange={(event) => updatePosition(index, 'quantity', event.currentTarget.value)} />
-              <label htmlFor={`position-price-${index}`}>建単価（原本記載値・円）</label>
-              <input id={`position-price-${index}`} required inputMode="decimal"
-                value={position.unitPriceYen}
-                onChange={(event) => updatePosition(index, 'unitPriceYen', event.currentTarget.value)} />
-              <label htmlFor={`position-opened-${index}`}>建日</label>
-              <input id={`position-opened-${index}`} type="date" required value={position.openedOn}
-                onChange={(event) => updatePosition(index, 'openedOn', event.currentTarget.value)} />
-              <label htmlFor={`position-due-${index}`}>期日（任意）</label>
-              <input id={`position-due-${index}`} type="date" value={position.dueOn}
-                onChange={(event) => updatePosition(index, 'dueOn', event.currentTarget.value)} />
-              {positions.length > 1 ? (
-                <button type="button" onClick={() => {
-                  invalidateConfirmation();
-                  setPositions((current) => current.filter((_, positionIndex) => positionIndex !== index));
-                }}>
-                  この建玉を削除
-                </button>
-              ) : null}
-            </fieldset>
-          )) : null}
-          {!confirmedNoPositions && positions.length < 100 ? (
-            <button type="button" onClick={() => {
-              invalidateConfirmation();
-              setPositions((current) => [...current, emptyPosition()]);
-            }}>
-              建玉を追加
-            </button>
-          ) : null}
-          <label>
-            <input type="checkbox" checked={confirmed}
-              onChange={(event) => setConfirmed(event.currentTarget.checked)} />
-            元の取引残高報告書の各信用建玉明細ページをすべて確認し、
-            全建玉を入力（または0件を確認）し、OCRから値を推測していません
-          </label>
-          <button type="submit" disabled={!confirmed || saving}>確認した建玉を保存</button>
-        </fieldset>
-      </form>
-      {saveMessage ? <p role="status">{saveMessage}</p> : null}
-      {savedSnapshot ? (
-        <p>
-          保存内容：{savedSnapshot.statementDate}・{savedSnapshot.positionCount}件
-        </p>
-      ) : null}
-    </section>
-  );
+  const unsupported = futures === 'nonzero' || options === 'nonzero';
+  return <section className="safe-report-result" aria-labelledby="full-checkpoint-title">
+    <h2 id="full-checkpoint-title">取引残高報告書を本人確認して保存</h2>
+    <p>報告書基準日時点の汎用的な証拠です。開始残高・終了残高とは扱いません。</p>
+    <p>PDFの生バイト、ファイル名、OCR出力、診断用の構造データはサーバーへ送信しません。ただし、このフォームへ手作業で転記した値はサーバーへ送信され、保存されます。</p>
+    <form onSubmit={(event) => void save(event)}><fieldset disabled={saving}>
+      <label>SBI口座<select value={brokerAccountId} onChange={(e) => changed(() => setBrokerAccountId(e.currentTarget.value))}>
+        {accounts.map((account) => <option key={account.id} value={account.id}>{account.displayName}</option>)}
+      </select></label>
+      <label>報告書基準日<input type="date" required value={statementDate}
+        onChange={(e) => changed(() => setStatementDate(e.currentTarget.value))} /></label>
+      {(['deposits', 'collateral', 'domesticStockLots', 'fundBalances', 'margin'] as SectionName[])
+        .map((name) => <Fragment key={name}>{section(name)}</Fragment>)}
+      {([['futures', '先物'], ['options', 'オプション']] as const).map(([name, label]) => {
+        const value = name === 'futures' ? futures : options;
+        const setter = name === 'futures' ? setFutures : setOptions;
+        return <fieldset key={name}><legend>{label}</legend>
+          <label><input type="radio" name={name} checked={value === 'zero'} onChange={() => changed(() => setter('zero'))} />0と確認した</label>
+          <label><input type="radio" name={name} checked={value === 'nonzero'} onChange={() => changed(() => setter('nonzero'))} />残高がある</label>
+          {value === 'zero' ? <>
+            <Field row={zeroLocators[name]} name="sourcePage" label={`${label}0記載ページ`}
+              type="number" max={sourcePageCount} onChange={(field, next) => changed(() =>
+                setZeroLocators((all) => ({ ...all, [name]: { ...all[name], [field]: next } })))} />
+            <Field row={zeroLocators[name]} name="sourceRow" label={`${label}0記載行`}
+              type="number" onChange={(field, next) => changed(() =>
+                setZeroLocators((all) => ({ ...all, [name]: { ...all[name], [field]: next } })))} />
+          </> : null}
+        </fieldset>;
+      })}
+      {unsupported ? <p role="alert">先物・オプションの残高ありはこの版では未対応のため保存できません。0として扱いません。</p> : null}
+      <label><input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.currentTarget.checked)} />
+        関係する全ページを元の報告書で確認し、0または全明細を入力しました</label>
+      <button type="submit" disabled={!reviewed || unsupported || futures !== 'zero' || options !== 'zero'
+        || Object.values(modes).some((mode) => !mode)}>確認した全残高を保存</button>
+    </fieldset></form>
+    {message ? <p role="status">{message}</p> : null}
+    {saved ? <p>直近の保存：{saved.statementDate}・明細{saved.rowCount ?? 0}件</p> : null}
+  </section>;
 }

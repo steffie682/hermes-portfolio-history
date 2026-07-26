@@ -11,6 +11,8 @@ import type { AppDatabase } from '@/db/client';
 import { createImportRepository } from '@/import/repository';
 import { createBalanceReportSnapshotRepository } from '@/import/sbi/balance-report-snapshot-repository';
 import { canonicalizeBalanceReportSnapshot } from '@/import/sbi/balance-report-snapshot';
+import { validateFullBalanceReportCheckpoint } from '@/import/sbi/full-balance-report-checkpoint';
+import { createFullBalanceReportCheckpointRepository } from '@/import/sbi/full-balance-report-checkpoint-repository';
 import { createMemoryPrivateSourceStorage } from '@/import/storage/memory-private-source-storage';
 import { migrationDirectories } from './helpers/migrations';
 
@@ -383,6 +385,238 @@ postgresDescribe('real PostgreSQL tenant security', () => {
       const userAPrincipal = await resolveSessionPrincipal('import-user-a', {
         findActiveUserByTokenHash: async () => 'user-a',
       });
+      const userBPrincipal = await resolveSessionPrincipal('import-user-b', {
+        findActiveUserByTokenHash: async () => 'user-b',
+      });
+      const fullCheckpointTables = [
+        'full_balance_report_checkpoints',
+        'full_balance_report_sections',
+        'full_balance_report_entries',
+        'full_balance_report_cash_rows',
+        'full_balance_report_stock_lots',
+        'full_balance_report_fund_balances',
+        'full_balance_report_margin_rows',
+      ];
+      const fullCheckpoint = validateFullBalanceReportCheckpoint({
+        brokerAccountId: userAAccount.id,
+        statementDate: '2026-07-24',
+        sourcePageCount: 1,
+        allRelevantPagesReviewed: true,
+        evidence: { kind: 'generic_as_of', confirmation: 'manual' },
+        deposits: {
+          evidenceState: 'explicit_zero',
+          zeroLocator: { sourcePage: 1, sourceRow: 1 },
+          rows: [],
+        },
+        collateral: {
+          evidenceState: 'explicit_zero',
+          zeroLocator: { sourcePage: 1, sourceRow: 2 },
+          rows: [],
+        },
+        domesticStockLots: {
+          evidenceState: 'explicit_zero',
+          zeroLocator: { sourcePage: 1, sourceRow: 3 },
+          rows: [],
+        },
+        fundBalances: {
+          evidenceState: 'explicit_zero',
+          zeroLocator: { sourcePage: 1, sourceRow: 4 },
+          rows: [],
+        },
+        margin: {
+          evidenceState: 'explicit_zero',
+          zeroLocator: { sourcePage: 1, sourceRow: 5 },
+          rows: [],
+        },
+        futures: {
+          evidenceState: 'explicit_zero',
+          zeroLocator: { sourcePage: 1, sourceRow: 6 },
+          rows: [],
+        },
+        options: {
+          evidenceState: 'explicit_zero',
+          zeroLocator: { sourcePage: 1, sourceRow: 7 },
+          rows: [],
+        },
+      });
+      const fullCheckpointRepositoryA = createFullBalanceReportCheckpointRepository(appDb);
+      const fullCheckpointRepositoryB = createFullBalanceReportCheckpointRepository(
+        drizzle({ client: appSecond }) as AppDatabase,
+      );
+      const concurrentFullCheckpoints = await Promise.all([
+        fullCheckpointRepositoryA.save(userAPrincipal!, fullCheckpoint),
+        fullCheckpointRepositoryB.save(userAPrincipal!, fullCheckpoint),
+      ]);
+      expect(concurrentFullCheckpoints.map((result) => result.created).sort()).toEqual([false, true]);
+      expect(new Set(concurrentFullCheckpoints.map((result) => result.checkpoint.id)).size).toBe(1);
+      const fullCheckpointId = concurrentFullCheckpoints[0].checkpoint.id;
+      const [fullCheckpointCounts] = await admin<{
+        parents: number;
+        sections: number;
+        zero_entries: number;
+        cash_rows: number;
+        stock_lots: number;
+        fund_balances: number;
+        margin_rows: number;
+      }[]>`
+        select
+          (select count(*)::int from full_balance_report_checkpoints
+            where id = ${fullCheckpointId}) parents,
+          (select count(*)::int from full_balance_report_sections
+            where checkpoint_id = ${fullCheckpointId}) sections,
+          (select count(*)::int from full_balance_report_entries
+            where checkpoint_id = ${fullCheckpointId} and entry_kind = 'zero') zero_entries,
+          (select count(*)::int from full_balance_report_cash_rows
+            where checkpoint_id = ${fullCheckpointId}) cash_rows,
+          (select count(*)::int from full_balance_report_stock_lots
+            where checkpoint_id = ${fullCheckpointId}) stock_lots,
+          (select count(*)::int from full_balance_report_fund_balances
+            where checkpoint_id = ${fullCheckpointId}) fund_balances,
+          (select count(*)::int from full_balance_report_margin_rows
+            where checkpoint_id = ${fullCheckpointId}) margin_rows
+      `;
+      expect(fullCheckpointCounts).toEqual({
+        parents: 1,
+        sections: 7,
+        zero_entries: 7,
+        cash_rows: 0,
+        stock_lots: 0,
+        fund_balances: 0,
+        margin_rows: 0,
+      });
+
+      await app.begin(async (tx) => {
+        await tx`select set_config('app.current_user_id', 'user-b', true)`;
+        expect(await tx`
+          select id from full_balance_report_checkpoints where id = ${fullCheckpointId}
+        `).toEqual([]);
+      });
+      await expect(app.begin(async (tx) => {
+        await tx`select set_config('app.current_user_id', 'user-a', true)`;
+        await tx`
+          insert into full_balance_report_checkpoints (
+            owner_user_id, broker_account_id, statement_date, source_page_count, fingerprint,
+            generic_as_of, manually_confirmed, all_relevant_pages_reviewed, fingerprint_version,
+            deposit_count, collateral_count, domestic_stock_lot_count, fund_balance_count,
+            margin_count
+          ) values (
+            'user-a', ${userBAccountForSnapshot.id}, '2026-07-24', 1, ${'a'.repeat(64)},
+            true, true, true, 2, 0, 0, 0, 0, 0
+          )
+        `;
+      })).rejects.toMatchObject({ code: '23503' });
+
+      const mutationStatements = [
+        `update full_balance_report_checkpoints set statement_date = statement_date where id = '${fullCheckpointId}'`,
+        `delete from full_balance_report_checkpoints where id = '${fullCheckpointId}'`,
+        `update full_balance_report_sections set declared_count = declared_count where checkpoint_id = '${fullCheckpointId}'`,
+        `delete from full_balance_report_sections where checkpoint_id = '${fullCheckpointId}'`,
+        `update full_balance_report_entries set source_row = source_row where checkpoint_id = '${fullCheckpointId}'`,
+        `delete from full_balance_report_entries where checkpoint_id = '${fullCheckpointId}'`,
+        `update full_balance_report_cash_rows set amount = amount where checkpoint_id = '${fullCheckpointId}'`,
+        `delete from full_balance_report_cash_rows where checkpoint_id = '${fullCheckpointId}'`,
+        `update full_balance_report_stock_lots set quantity = quantity where checkpoint_id = '${fullCheckpointId}'`,
+        `delete from full_balance_report_stock_lots where checkpoint_id = '${fullCheckpointId}'`,
+        `update full_balance_report_fund_balances set units = units where checkpoint_id = '${fullCheckpointId}'`,
+        `delete from full_balance_report_fund_balances where checkpoint_id = '${fullCheckpointId}'`,
+        `update full_balance_report_margin_rows set quantity = quantity where checkpoint_id = '${fullCheckpointId}'`,
+        `delete from full_balance_report_margin_rows where checkpoint_id = '${fullCheckpointId}'`,
+      ];
+      for (const statement of mutationStatements) {
+        await expect(app.begin(async (tx) => {
+          await tx`select set_config('app.current_user_id', 'user-a', true)`;
+          await tx.unsafe(statement);
+        })).rejects.toMatchObject({ code: '42501' });
+      }
+
+      const insertDirectCheckpointParent = async (
+        tx: postgres.TransactionSql,
+        fingerprint: string,
+      ) => {
+        const [parent] = await tx<{ id: string }[]>`
+          insert into full_balance_report_checkpoints (
+            owner_user_id, broker_account_id, statement_date, source_page_count, fingerprint,
+            generic_as_of, manually_confirmed, all_relevant_pages_reviewed, fingerprint_version,
+            deposit_count, collateral_count, domestic_stock_lot_count, fund_balance_count,
+            margin_count
+          ) values (
+            'user-a', ${userAAccount.id}, '2026-07-25', 1, ${fingerprint},
+            true, true, true, 2, 0, 0, 0, 0, 0
+          ) returning id
+        `;
+        return parent.id;
+      };
+      await expect(app.begin(async (tx) => {
+        await tx`select set_config('app.current_user_id', 'user-a', true)`;
+        await insertDirectCheckpointParent(tx, 'b'.repeat(64));
+      })).rejects.toMatchObject({ code: 'P0001' });
+      await expect(app.begin(async (tx) => {
+        await tx`select set_config('app.current_user_id', 'user-a', true)`;
+        const checkpointId = await insertDirectCheckpointParent(tx, 'c'.repeat(64));
+        await tx`
+          insert into full_balance_report_sections (
+            owner_user_id, broker_account_id, checkpoint_id, section_kind,
+            evidence_state, declared_count
+          )
+          select 'user-a', ${userAAccount.id}, ${checkpointId}, section_kind,
+                 'explicit_zero', 0
+          from unnest(array[
+            'deposits', 'collateral', 'domesticStockLots', 'fundBalances',
+            'margin', 'futures', 'options'
+          ]) with ordinality as section(section_kind, position)
+        `;
+        await tx`
+          insert into full_balance_report_entries (
+            owner_user_id, broker_account_id, checkpoint_id, section_kind,
+            entry_kind, row_index, source_page, source_row
+          )
+          select 'user-a', ${userAAccount.id}, ${checkpointId}, section_kind,
+                 'zero', null, case when position = 7 then 2 else 1 end, position
+          from unnest(array[
+            'deposits', 'collateral', 'domesticStockLots', 'fundBalances',
+            'margin', 'futures', 'options'
+          ]) with ordinality as section(section_kind, position)
+        `;
+      })).rejects.toMatchObject({ code: 'P0001' });
+
+      const fullCheckpointAcl = await admin<{
+        table_name: string;
+        can_select: boolean;
+        can_insert: boolean;
+        can_update: boolean;
+        can_delete: boolean;
+      }[]>`
+        select table_name,
+               has_table_privilege('portfolio_app', format('%I.%I', table_schema, table_name), 'SELECT') can_select,
+               has_table_privilege('portfolio_app', format('%I.%I', table_schema, table_name), 'INSERT') can_insert,
+               has_table_privilege('portfolio_app', format('%I.%I', table_schema, table_name), 'UPDATE') can_update,
+               has_table_privilege('portfolio_app', format('%I.%I', table_schema, table_name), 'DELETE') can_delete
+        from information_schema.tables
+        where table_schema = 'public' and table_name = any(${fullCheckpointTables})
+        order by table_name
+      `;
+      expect(fullCheckpointAcl).toHaveLength(7);
+      expect(fullCheckpointAcl.every((row) => row.can_select && row.can_insert
+        && !row.can_update && !row.can_delete)).toBe(true);
+      const [fullCheckpointFunctionAcl] = await admin<{
+        public_reject: boolean;
+        app_reject: boolean;
+        public_validate: boolean;
+        app_validate: boolean;
+      }[]>`
+        select
+          has_function_privilege('public', 'public.full_balance_report_reject_mutation()', 'EXECUTE') public_reject,
+          has_function_privilege('portfolio_app', 'public.full_balance_report_reject_mutation()', 'EXECUTE') app_reject,
+          has_function_privilege('public', 'public.full_balance_report_validate_checkpoint()', 'EXECUTE') public_validate,
+          has_function_privilege('portfolio_app', 'public.full_balance_report_validate_checkpoint()', 'EXECUTE') app_validate
+      `;
+      expect(fullCheckpointFunctionAcl).toEqual({
+        public_reject: false,
+        app_reject: false,
+        public_validate: false,
+        app_validate: false,
+      });
+
       const balanceCatalogs = await admin<{
         relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean;
       }[]>`
@@ -533,9 +767,6 @@ postgresDescribe('real PostgreSQL tenant security', () => {
         mediaType: 'text/csv',
         bytes: csv,
       })).resolves.toMatchObject({ disposition: 'duplicate' });
-      const userBPrincipal = await resolveSessionPrincipal('import-user-b', {
-        findActiveUserByTokenHash: async () => 'user-b',
-      });
       await expect(importRepository.getBatchTrace({
         principal: userBPrincipal!,
         batchId: staged.batchId,

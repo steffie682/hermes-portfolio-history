@@ -371,6 +371,275 @@ export const balanceReportPositions = pgTable.withRLS(
   ],
 );
 
+export const fullBalanceReportCheckpoints = pgTable.withRLS(
+  'full_balance_report_checkpoints',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    ownerUserId: text('owner_user_id').notNull().references(() => authUsers.id, { onDelete: 'restrict' }),
+    brokerAccountId: uuid('broker_account_id').notNull(),
+    statementDate: date('statement_date', { mode: 'string' }).notNull(),
+    sourcePageCount: integer('source_page_count').notNull(),
+    fingerprint: text('fingerprint').notNull(),
+    genericAsOf: boolean('generic_as_of').notNull(),
+    manuallyConfirmed: boolean('manually_confirmed').notNull(),
+    allRelevantPagesReviewed: boolean('all_relevant_pages_reviewed').notNull(),
+    fingerprintVersion: integer('fingerprint_version').notNull(),
+    depositCount: integer('deposit_count').notNull(),
+    collateralCount: integer('collateral_count').notNull(),
+    domesticStockLotCount: integer('domestic_stock_lot_count').notNull(),
+    fundBalanceCount: integer('fund_balance_count').notNull(),
+    marginCount: integer('margin_count').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('full_balance_report_checkpoints_owner_account_id_uidx')
+      .on(table.ownerUserId, table.brokerAccountId, table.id),
+    uniqueIndex('full_balance_report_checkpoints_owner_fingerprint_uidx')
+      .on(table.ownerUserId, table.fingerprint),
+    foreignKey({
+      name: 'full_balance_report_checkpoints_owner_broker_account_fk',
+      columns: [table.ownerUserId, table.brokerAccountId],
+      foreignColumns: [brokerAccounts.ownerUserId, brokerAccounts.id],
+    }).onDelete('restrict'),
+    check('full_balance_report_checkpoints_evidence_check', sql`
+      ${table.genericAsOf} AND ${table.manuallyConfirmed} AND
+      ${table.allRelevantPagesReviewed} AND ${table.fingerprintVersion} = 2`),
+    check('full_balance_report_checkpoints_fingerprint_check',
+      sql`${table.fingerprint} ~ '^[0-9a-f]{64}$'`),
+    check('full_balance_report_checkpoints_counts_check', sql`
+      ${table.depositCount} BETWEEN 0 AND 100 AND
+      ${table.collateralCount} BETWEEN 0 AND 100 AND
+      ${table.domesticStockLotCount} BETWEEN 0 AND 100 AND
+      ${table.fundBalanceCount} BETWEEN 0 AND 100 AND
+      ${table.marginCount} BETWEEN 0 AND 100`),
+    check('full_balance_report_checkpoints_source_page_count_check',
+      sql`${table.sourcePageCount} BETWEEN 1 AND 100`),
+    pgPolicy('full_balance_report_checkpoints_owner_select', {
+      for: 'select', to: 'public',
+      using: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')`,
+    }),
+    pgPolicy('full_balance_report_checkpoints_owner_insert', {
+      for: 'insert', to: 'public',
+      withCheck: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')`,
+    }),
+  ],
+);
+
+export const fullBalanceReportSections = pgTable.withRLS(
+  'full_balance_report_sections',
+  {
+    ownerUserId: text('owner_user_id').notNull().references(() => authUsers.id, { onDelete: 'restrict' }),
+    brokerAccountId: uuid('broker_account_id').notNull(),
+    checkpointId: uuid('checkpoint_id').notNull(),
+    sectionKind: text('section_kind').notNull(),
+    evidenceState: text('evidence_state').notNull(),
+    declaredCount: integer('declared_count').notNull(),
+  },
+  (table) => [
+    uniqueIndex('full_balance_report_sections_identity_uidx')
+      .on(table.ownerUserId, table.brokerAccountId, table.checkpointId, table.sectionKind),
+    foreignKey({
+      name: 'full_balance_report_sections_owner_account_checkpoint_fk',
+      columns: [table.ownerUserId, table.brokerAccountId, table.checkpointId],
+      foreignColumns: [fullBalanceReportCheckpoints.ownerUserId,
+        fullBalanceReportCheckpoints.brokerAccountId, fullBalanceReportCheckpoints.id],
+    }).onDelete('restrict'),
+    check('full_balance_report_sections_kind_check', sql`${table.sectionKind} IN
+      ('deposits','collateral','domesticStockLots','fundBalances','margin','futures','options')`),
+    check('full_balance_report_sections_state_check', sql`
+      (${table.evidenceState} = 'explicit_zero' AND ${table.declaredCount} = 0) OR
+      (${table.evidenceState} = 'reported' AND ${table.declaredCount} BETWEEN 1 AND 100)`),
+    pgPolicy('full_balance_report_sections_owner_select', { for: 'select', to: 'public',
+      using: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')` }),
+    pgPolicy('full_balance_report_sections_owner_insert', { for: 'insert', to: 'public',
+      withCheck: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')` }),
+  ],
+);
+
+export const fullBalanceReportEntries = pgTable.withRLS(
+  'full_balance_report_entries',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    ownerUserId: text('owner_user_id').notNull().references(() => authUsers.id, { onDelete: 'restrict' }),
+    brokerAccountId: uuid('broker_account_id').notNull(),
+    checkpointId: uuid('checkpoint_id').notNull(),
+    sectionKind: text('section_kind').notNull(),
+    entryKind: text('entry_kind').notNull(),
+    rowIndex: integer('row_index'),
+    sourcePage: integer('source_page').notNull(),
+    sourceRow: integer('source_row').notNull(),
+  },
+  (table) => [
+    uniqueIndex('full_balance_report_entries_owner_account_checkpoint_entry_uidx')
+      .on(table.ownerUserId, table.brokerAccountId, table.checkpointId,
+        table.sectionKind, table.rowIndex, table.id),
+    uniqueIndex('full_balance_report_entries_checkpoint_locator_uidx')
+      .on(table.checkpointId, table.sourcePage, table.sourceRow),
+    uniqueIndex('full_balance_report_entries_checkpoint_section_index_uidx')
+      .on(table.checkpointId, table.sectionKind, table.rowIndex),
+    foreignKey({
+      name: 'full_balance_report_entries_section_fk',
+      columns: [table.ownerUserId, table.brokerAccountId, table.checkpointId, table.sectionKind],
+      foreignColumns: [fullBalanceReportSections.ownerUserId, fullBalanceReportSections.brokerAccountId,
+        fullBalanceReportSections.checkpointId, fullBalanceReportSections.sectionKind],
+    }).onDelete('restrict'),
+    check('full_balance_report_entries_shape_check', sql`
+      ${table.sourcePage} BETWEEN 1 AND 100 AND ${table.sourceRow} BETWEEN 1 AND 100 AND
+      ((${table.entryKind} = 'zero' AND ${table.rowIndex} IS NULL) OR
+       (${table.entryKind} = 'row' AND ${table.rowIndex} BETWEEN 1 AND 100))`),
+    pgPolicy('full_balance_report_entries_owner_select', { for: 'select', to: 'public',
+      using: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')` }),
+    pgPolicy('full_balance_report_entries_owner_insert', { for: 'insert', to: 'public',
+      withCheck: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')` }),
+  ],
+);
+
+// Drizzle supplies table-bound extra-config columns whose internal generic table
+// name differs for every child; this helper only consumes their SQL column shape.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const checkpointChild = (table: Record<'ownerUserId' | 'brokerAccountId' | 'checkpointId' | 'rowIndex' | 'sectionKind' | 'entryId', any>, prefix: string) => [
+  uniqueIndex(`${prefix}_checkpoint_index_uidx`).on(table.checkpointId, table.sectionKind, table.rowIndex),
+  foreignKey({
+    name: `${prefix}_entry_fk`,
+    columns: [table.ownerUserId, table.brokerAccountId, table.checkpointId,
+      table.sectionKind, table.rowIndex, table.entryId],
+    foreignColumns: [
+      fullBalanceReportEntries.ownerUserId, fullBalanceReportEntries.brokerAccountId,
+      fullBalanceReportEntries.checkpointId, fullBalanceReportEntries.sectionKind,
+      fullBalanceReportEntries.rowIndex,
+      fullBalanceReportEntries.id,
+    ],
+  }).onDelete('restrict'),
+  check(`${prefix}_bounds_check`, sql`${table.rowIndex} BETWEEN 1 AND 100`),
+  pgPolicy(`${prefix}_owner_select`, {
+    for: 'select' as const, to: 'public',
+    using: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')`,
+  }),
+  pgPolicy(`${prefix}_owner_insert`, {
+    for: 'insert' as const, to: 'public',
+    withCheck: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')`,
+  }),
+];
+
+export const fullBalanceReportCashRows = pgTable.withRLS(
+  'full_balance_report_cash_rows',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    ownerUserId: text('owner_user_id').notNull().references(() => authUsers.id, { onDelete: 'restrict' }),
+    brokerAccountId: uuid('broker_account_id').notNull(),
+    checkpointId: uuid('checkpoint_id').notNull(),
+    entryId: uuid('entry_id').notNull(),
+    rowIndex: integer('row_index').notNull(),
+    sectionKind: text('section_kind').notNull(),
+    sourceKind: text('source_kind').notNull(),
+    amount: numeric('amount', { precision: 20, scale: 2, mode: 'string' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    ...checkpointChild(table, 'full_balance_report_cash_rows'),
+    check('full_balance_report_cash_rows_kind_check', sql`
+      (${table.sectionKind} = 'deposits' AND ${table.sourceKind} = 'cash_deposit') OR
+      (${table.sectionKind} = 'collateral' AND ${table.sourceKind} IN
+        ('margin_guarantee', 'stock_lending_collateral', 'futures_options_margin'))`),
+    check('full_balance_report_cash_rows_amount_check', sql`${table.amount} > 0`),
+  ],
+);
+
+export const fullBalanceReportStockLots = pgTable.withRLS(
+  'full_balance_report_stock_lots',
+  {
+    id: uuid('id').defaultRandom().primaryKey(), ownerUserId: text('owner_user_id').notNull().references(() => authUsers.id, { onDelete: 'restrict' }),
+    brokerAccountId: uuid('broker_account_id').notNull(), checkpointId: uuid('checkpoint_id').notNull(),
+    entryId: uuid('entry_id').notNull(), sectionKind: text('section_kind').notNull(),
+    rowIndex: integer('row_index').notNull(),
+    securityCode: text('security_code').notNull(), securityName: text('security_name').notNull(),
+    acquisitionDate: date('acquisition_date', { mode: 'string' }).notNull(),
+    quantity: numeric('quantity', { precision: 24, scale: 6, mode: 'string' }).notNull(),
+    acquisitionUnitPriceState: text('acquisition_unit_price_state').notNull(),
+    purchaseAmountState: text('purchase_amount_state').notNull(),
+    acquisitionUnitPrice: numeric('acquisition_unit_price', { precision: 24, scale: 6, mode: 'string' }),
+    purchaseAmount: numeric('purchase_amount', { precision: 20, scale: 2, mode: 'string' }),
+    referencePrice: numeric('reference_price', { precision: 24, scale: 6, mode: 'string' }),
+    evaluationAmount: numeric('evaluation_amount', { precision: 20, scale: 2, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    ...checkpointChild(table, 'full_balance_report_stock_lots'),
+    check('full_balance_report_stock_lots_code_check', sql`${table.securityCode} ~ '^(?:[0-9][0-9A-HJ-NP-UW-Y][0-9][0-9A-HJ-NP-UW-Y]|[0-9]{3}\\.[0-9]{2})$'`),
+    check('full_balance_report_stock_lots_values_check', sql`
+      char_length(${table.securityName}) BETWEEN 1 AND 100 AND ${table.quantity} > 0 AND
+      ((${table.acquisitionUnitPriceState} = 'reported' AND ${table.acquisitionUnitPrice} > 0) OR
+       (${table.acquisitionUnitPriceState} IN ('masked','absent') AND ${table.acquisitionUnitPrice} IS NULL)) AND
+      ((${table.purchaseAmountState} = 'reported' AND ${table.purchaseAmount} > 0) OR
+       (${table.purchaseAmountState} IN ('masked','absent') AND ${table.purchaseAmount} IS NULL)) AND
+      (${table.referencePrice} IS NULL OR ${table.referencePrice} > 0) AND
+      (${table.evaluationAmount} IS NULL OR ${table.evaluationAmount} > 0)`),
+    check('full_balance_report_stock_lots_section_check',
+      sql`${table.sectionKind} = 'domesticStockLots'`),
+  ],
+);
+
+export const fullBalanceReportFundBalances = pgTable.withRLS(
+  'full_balance_report_fund_balances',
+  {
+    id: uuid('id').defaultRandom().primaryKey(), ownerUserId: text('owner_user_id').notNull().references(() => authUsers.id, { onDelete: 'restrict' }),
+    brokerAccountId: uuid('broker_account_id').notNull(), checkpointId: uuid('checkpoint_id').notNull(),
+    entryId: uuid('entry_id').notNull(), sectionKind: text('section_kind').notNull(),
+    rowIndex: integer('row_index').notNull(),
+    securityCode: text('security_code').notNull(), securityName: text('security_name').notNull(),
+    units: numeric('units', { precision: 24, scale: 6, mode: 'string' }).notNull(),
+    referencePrice: numeric('reference_price', { precision: 24, scale: 6, mode: 'string' }).notNull(),
+    evaluationAmount: numeric('evaluation_amount', { precision: 20, scale: 2, mode: 'string' }).notNull(),
+    referencePriceUnit: numeric('reference_price_unit', { precision: 24, scale: 6, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    ...checkpointChild(table, 'full_balance_report_fund_balances'),
+    check('full_balance_report_fund_balances_code_check', sql`${table.securityCode} ~ '^(?:[0-9][0-9A-HJ-NP-UW-Y][0-9][0-9A-HJ-NP-UW-Y]|[0-9]{3}\\.[0-9]{2})$'`),
+    check('full_balance_report_fund_balances_values_check', sql`
+      char_length(${table.securityName}) BETWEEN 1 AND 100 AND ${table.units} > 0 AND
+      ${table.referencePrice} > 0 AND ${table.evaluationAmount} > 0 AND
+      (${table.referencePriceUnit} IS NULL OR ${table.referencePriceUnit} > 0)`),
+    check('full_balance_report_fund_balances_section_check',
+      sql`${table.sectionKind} = 'fundBalances'`),
+  ],
+);
+
+export const fullBalanceReportMarginRows = pgTable.withRLS(
+  'full_balance_report_margin_rows',
+  {
+    id: uuid('id').defaultRandom().primaryKey(), ownerUserId: text('owner_user_id').notNull().references(() => authUsers.id, { onDelete: 'restrict' }),
+    brokerAccountId: uuid('broker_account_id').notNull(), checkpointId: uuid('checkpoint_id').notNull(),
+    entryId: uuid('entry_id').notNull(), sectionKind: text('section_kind').notNull(),
+    rowIndex: integer('row_index').notNull(),
+    state: text('state').notNull(), securityCode: text('security_code').notNull(), securityName: text('security_name').notNull(),
+    quantity: numeric('quantity', { precision: 24, scale: 6, mode: 'string' }).notNull(), market: text('market').notNull(),
+    side: text('side').notNull(), contractDate: date('contract_date', { mode: 'string' }).notNull(),
+    contractUnitPrice: numeric('contract_unit_price', { precision: 24, scale: 6, mode: 'string' }).notNull(),
+    currentPrice: numeric('current_price', { precision: 24, scale: 6, mode: 'string' }),
+    fees: numeric('fees', { precision: 20, scale: 2, mode: 'string' }),
+    unrealizedPnl: numeric('unrealized_pnl', { precision: 20, scale: 2, mode: 'string' }),
+    finalRepaymentDueDate: date('final_repayment_due_date', { mode: 'string' }),
+    settlementContractDate: date('settlement_contract_date', { mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    ...checkpointChild(table, 'full_balance_report_margin_rows'),
+    check('full_balance_report_margin_rows_code_check', sql`${table.securityCode} ~ '^(?:[0-9][0-9A-HJ-NP-UW-Y][0-9][0-9A-HJ-NP-UW-Y]|[0-9]{3}\\.[0-9]{2})$'`),
+    check('full_balance_report_margin_rows_values_check', sql`
+      char_length(${table.securityName}) BETWEEN 1 AND 100 AND
+      ${table.market} IN ('tokyo','private','nagoya','fukuoka','sapporo') AND
+      ${table.quantity} > 0 AND ${table.contractUnitPrice} > 0 AND ${table.side} IN ('buy', 'sell') AND
+      (${table.currentPrice} IS NULL OR ${table.currentPrice} > 0) AND
+      (${table.fees} IS NULL OR ${table.fees} >= 0) AND
+      ${table.state} = 'open' AND ${table.finalRepaymentDueDate} IS NOT NULL AND
+      ${table.settlementContractDate} IS NULL AND
+      ${table.finalRepaymentDueDate} >= ${table.contractDate}`),
+    check('full_balance_report_margin_rows_section_check',
+      sql`${table.sectionKind} = 'margin'`),
+  ],
+);
+
 export const authSessions = pgTable('auth_sessions', {
   id: uuid('id').defaultRandom().primaryKey(),
   userId: text('user_id')
