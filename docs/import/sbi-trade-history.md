@@ -95,7 +95,9 @@ fixtureには氏名、口座番号、実銘柄、実金額を含めない。
 - PDF textは処理中のbrowser memoryだけで使い、React state、storage、server、consoleへ保存しない。
 - stateと保存可能なsafe reportには、既知の見出し、値の型、10pt単位へ丸めた配置、page数だけを保持する。
 - 氏名、口座番号、銘柄、銘柄コード、日付値、数量、単価、金額、元filename、hashはsafe reportへ含めない。
-- safe reportは開始・終了建玉checkpoint parserを作るための形式調査用であり、資産残高を確定しない。
+- 任意で保存できるsafe JSONは形式診断専用であり、残高checkpointの証拠ではなく、資産残高を確定しない。
+- 元の報告書を見て型付き入力した0件または1〜100件の信用建玉を、報告書基準日時点の汎用的な残高報告書checkpointとして、明示的な確認後にappend-only evidenceへ保存する。0件は専用確認を必須とし、空の入力欄から推測しない。
+- このcheckpointは特定日時点の汎用的な証拠であり、信用台帳eventを計上せず、資産残高を完成させない。
 
 
 ## 現物株・通常投資信託の段階event

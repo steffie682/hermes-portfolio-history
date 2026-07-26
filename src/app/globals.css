@@ -112,6 +112,9 @@ dd { margin: 0; font-weight: 650; }
 .safe-report-result { margin-top: 28px; padding: 20px; border: 1px solid #c9d9e8; border-radius: 16px; background: #f5f9fc; }
 .safe-report-result ul { display: flex; flex-wrap: wrap; gap: 8px; padding: 0; list-style: none; }
 .safe-report-result li { padding: 6px 10px; border-radius: 999px; background: #e2edf6; font-size: .86rem; }
+.safe-report-result form, .safe-report-result fieldset { display: grid; gap: 10px; }
+.safe-report-result fieldset { margin: 16px 0; padding: 16px; border: 1px solid #c9d9e8; border-radius: 12px; }
+.safe-report-result input, .safe-report-result select { max-width: 100%; font: inherit; }
 
 .cash-readiness { margin: 0 0 18px; padding: 16px; border: 1px solid #9fc4dd; border-radius: 12px; background: #eef7fc; }
 .cash-readiness strong { display: block; color: #164f73; }
