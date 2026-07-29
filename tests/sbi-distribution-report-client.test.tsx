@@ -59,6 +59,15 @@ describe('SBI distribution report client', () => {
     expect(document.body.textContent).not.toContain('CANARY_SOURCE_FILENAME');
   });
 
+  it('shows a clear route back to the SBI CSV import after generating safe JSON', async () => {
+    render(<SbiDistributionReportClient inspectPdf={vi.fn().mockResolvedValue(safeReport)} />);
+    choose(pdfFile());
+
+    expect(await screen.findByText('PDF 1ページ')).toBeTruthy();
+    const backLink = screen.getByRole('link', { name: 'SBI CSV取込画面へ戻る' });
+    expect(backLink.getAttribute('href')).toBe('/imports/sbi');
+  });
+
   it('states the successful report boundary and asks to share only safe JSON', async () => {
     render(<SbiDistributionReportClient inspectPdf={vi.fn().mockResolvedValue(safeReport)} />);
     choose(pdfFile());

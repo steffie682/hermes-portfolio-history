@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { buildSbiIncomeStructureSafeReport } from '@/import/sbi/balance-report-safe-report';
 import { buildSbiPastedIncomeTextSafeReport } from '@/import/sbi/pasted-income-text-safe-report';
@@ -186,6 +187,8 @@ export default function SbiDistributionReportClient({
             保留中のインポート状態はまだ解決しません。
           </p>
           <p className="preview-note">保存した安全なJSONだけを共有した後、実装を続けられます。</p>
+          <p className="preview-note">JSONを保存したら、SBI CSV取込画面へ戻って作業を続けてください。</p>
+          <Link className="balance-report-link" href="/imports/sbi">SBI CSV取込画面へ戻る</Link>
         </section>
       ) : null}
     </>
