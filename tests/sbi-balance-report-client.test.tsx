@@ -77,6 +77,19 @@ function confirmAllSectionsAsZero() {
 afterEach(() => cleanup());
 
 describe('SBI balance report client', () => {
+  it('uses a plain SBI import return label when opened without a saved batch', () => {
+    render(<SbiBalanceReportClient />);
+    expect(screen.getByRole('link', { name: 'SBI CSV取込へ戻る' }).getAttribute('href')).toBe('/imports/sbi');
+    expect(screen.queryByRole('link', { name: '保存済みの取込作業へ戻る' })).toBeNull();
+  });
+
+  it('keeps a visible route back to the originating saved import work', () => {
+    const returnHref = '/imports/sbi/10000000-0000-4000-8000-000000000001';
+    render(<SbiBalanceReportClient returnHref={returnHref} />);
+    expect(screen.getByRole('link', { name: '保存済みの取込作業へ戻る' }).getAttribute('href'))
+      .toBe(returnHref);
+  });
+
   it('gates the exact post-inspection full-checkpoint payload on original-report confirmation', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       checkpoint: {

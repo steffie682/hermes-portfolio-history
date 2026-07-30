@@ -34,6 +34,16 @@ function deferred<T>() {
 afterEach(() => cleanup());
 
 describe('SBI distribution report client', () => {
+  it('keeps the return route visible before selection and after a PDF error', async () => {
+    const returnHref = '/imports/sbi/10000000-0000-4000-8000-000000000001';
+    render(<SbiDistributionReportClient returnHref={returnHref} />);
+    const link = screen.getByRole('link', { name: '保存済みの取込作業へ戻る' });
+    expect(link.getAttribute('href')).toBe(returnHref);
+    choose({ size: 5, arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array(5).buffer) } as unknown as File);
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.getByRole('link', { name: '保存済みの取込作業へ戻る' }).getAttribute('href')).toBe(returnHref);
+  });
+
   it('explains which single PDF to choose before the single-file input', () => {
     render(<SbiDistributionReportClient inspectPdf={vi.fn()} />);
 
@@ -51,7 +61,7 @@ describe('SBI distribution report client', () => {
 
     expect(await screen.findByText('PDF 1ページ')).toBeTruthy();
     expect(screen.getByText('収益分配金')).toBeTruthy();
-    const download = screen.getByRole('link', { name: '安全な構造レポートを保存' });
+    const download = screen.getByRole('link', { name: '診断用JSONを保存（任意）' });
     expect(download.getAttribute('download')).toBe('sbi-distribution-safe-structure.json');
     const artifact = decodeURIComponent(download.getAttribute('href') ?? '');
     expect(artifact).toContain('sbi-income-structure');
@@ -60,12 +70,25 @@ describe('SBI distribution report client', () => {
   });
 
   it('shows a clear route back to the SBI CSV import after generating safe JSON', async () => {
-    render(<SbiDistributionReportClient inspectPdf={vi.fn().mockResolvedValue(safeReport)} />);
+    const returnHref = '/imports/sbi/10000000-0000-4000-8000-000000000001';
+    render(<SbiDistributionReportClient
+      inspectPdf={vi.fn().mockResolvedValue(safeReport)}
+      returnHref={returnHref}
+    />);
     choose(pdfFile());
 
     expect(await screen.findByText('PDF 1ページ')).toBeTruthy();
-    const backLink = screen.getByRole('link', { name: 'SBI CSV取込画面へ戻る' });
-    expect(backLink.getAttribute('href')).toBe('/imports/sbi');
+    expect(screen.getByRole('link', { name: '診断用JSONを保存（任意）' })).toBeTruthy();
+    expect(screen.getByText(/このJSONは取込用ではありません/)).toBeTruthy();
+    const backLink = screen.getByRole('link', { name: '保存済みの取込作業へ戻る' });
+    expect(backLink.getAttribute('href')).toBe(returnHref);
+  });
+
+  it('uses a plain SBI import return label when opened without a saved batch', async () => {
+    render(<SbiDistributionReportClient inspectPdf={vi.fn().mockResolvedValue(safeReport)} />);
+    choose(pdfFile());
+    expect(await screen.findByRole('link', { name: 'SBI CSV取込へ戻る' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: '保存済みの取込作業へ戻る' })).toBeNull();
   });
 
   it('states the successful report boundary and asks to share only safe JSON', async () => {
@@ -73,12 +96,12 @@ describe('SBI distribution report client', () => {
     choose(pdfFile());
 
     expect(await screen.findByText('PDF 1ページ')).toBeTruthy();
-    const boundary = screen.getByText(/この結果で確認できるのはPDFのレイアウトだけです/);
-    for (const unresolved of ['分配金額', '税金', '取得価額', '再投資の会計処理', '保留中のインポート状態']) {
+    const boundary = screen.getByText(/このJSONは取込用ではありません/);
+    for (const unresolved of ['金額', '税金', '取得価額']) {
       expect(boundary.textContent).toContain(unresolved);
     }
-    expect(boundary.textContent).toContain('まだ解決しません');
-    expect(screen.getByText(/安全なJSONだけを共有した後、実装を続けられます/)).toBeTruthy();
+    expect(boundary.textContent).toContain('取引は完成しません');
+    expect(screen.getByText(/保存済みの取込作業にある入力欄へ記録/)).toBeTruthy();
     expect(screen.queryByText(/元のPDFを共有/)).toBeNull();
   });
 
@@ -140,7 +163,7 @@ describe('SBI distribution report client', () => {
 
     expect(textarea.value).toBe('');
     expect(screen.getByRole('status').textContent).toContain('構造だけ');
-    const download = screen.getByRole('link', { name: '安全な構造レポートを保存' });
+    const download = screen.getByRole('link', { name: '診断用JSONを保存（任意）' });
     expect(decodeURIComponent(download.getAttribute('href') ?? '')).not.toContain('CANARY_PASTED_SOURCE');
     expect(document.body.textContent).not.toContain('CANARY_PASTED_SOURCE');
   });
@@ -158,12 +181,12 @@ describe('SBI distribution report client', () => {
     const textarea = await screen.findByLabelText('Chrome PDFビューアーからコピーしたテキスト') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: '収益分配金' } });
     fireEvent.click(screen.getByRole('button', { name: '貼り付けテキストを安全な構造に変換' }));
-    expect(screen.getByRole('link', { name: '安全な構造レポートを保存' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: '診断用JSONを保存（任意）' })).toBeTruthy();
 
     fireEvent.change(textarea, { target: { value: 'CANARY_BAD\u0000SOURCE' } });
     fireEvent.click(screen.getByRole('button', { name: '貼り付けテキストを安全な構造に変換' }));
     expect(textarea.value).toBe('');
-    expect(screen.queryByRole('link', { name: '安全な構造レポートを保存' })).toBeNull();
+    expect(screen.queryByRole('link', { name: '診断用JSONを保存（任意）' })).toBeNull();
     expect(screen.getByRole('alert').textContent).toContain('貼り付けテキストを変換できません');
     expect(document.body.textContent).not.toContain('CANARY_BAD');
   });
@@ -185,7 +208,7 @@ describe('SBI distribution report client', () => {
     expect(textarea.value).toBe('');
     expect(screen.getByRole('alert').textContent).toContain('この結果は利用できません');
     expect(screen.getByRole('alert').textContent).toContain('書類を確認');
-    expect(screen.queryByRole('link', { name: '安全な構造レポートを保存' })).toBeNull();
+    expect(screen.queryByRole('link', { name: '診断用JSONを保存（任意）' })).toBeNull();
     expect(document.body.textContent).not.toContain('CANARY_UNKNOWN_DOCUMENT');
   });
 
@@ -248,7 +271,7 @@ describe('SBI distribution report client', () => {
     expect(await screen.findByText('PDF 1ページ')).toBeTruthy();
 
     choose({ name: 'replacement.pdf', size: 5, arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array(5).buffer) } as unknown as File);
-    expect(screen.queryByRole('link', { name: '安全な構造レポートを保存' })).toBeNull();
+    expect(screen.queryByRole('link', { name: '診断用JSONを保存（任意）' })).toBeNull();
     expect(await screen.findByRole('alert')).toBeTruthy();
   });
 });

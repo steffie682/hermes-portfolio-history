@@ -482,6 +482,7 @@ export function createImportRepository(
         const [batch] = await tx
           .select({
             id: importBatches.id,
+            brokerAccountId: importBatches.brokerAccountId,
             status: importBatches.status,
             createdAt: importBatches.createdAt,
             committedAt: importBatches.committedAt,
@@ -511,6 +512,7 @@ export function createImportRepository(
           .orderBy(sourceRecords.sourceRow);
         return {
           batchId: batch.id,
+          brokerAccountId: batch.brokerAccountId,
           status: batch.status,
           createdAt: batch.createdAt,
           committedAt: batch.committedAt,

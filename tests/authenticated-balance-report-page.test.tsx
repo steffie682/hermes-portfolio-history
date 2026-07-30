@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   resolvePageSessionPrincipal: vi.fn(),
@@ -7,12 +7,19 @@ const mocks = vi.hoisted(() => ({
   listBrokerAccounts: vi.fn(),
   listRecentV1ForMerge: vi.fn(),
   listRecentV2ForMerge: vi.fn(),
+  getBatchTrace: vi.fn(),
 }));
 vi.mock('@/auth/page-session', () => ({ resolvePageSessionPrincipal: mocks.resolvePageSessionPrincipal }));
 vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
 vi.mock('@/auth/runtime', () => ({
   getAuthRuntime: vi.fn().mockResolvedValue({
     repository: { listBrokerAccounts: mocks.listBrokerAccounts },
+  }),
+}));
+vi.mock('@/import/runtime', () => ({
+  getImportRuntime: vi.fn().mockResolvedValue({
+    repository: { listBrokerAccounts: mocks.listBrokerAccounts },
+    importRepository: { getBatchTrace: mocks.getBatchTrace },
   }),
 }));
 vi.mock('@/db/client', () => ({ getDatabase: vi.fn().mockReturnValue({}) }));
@@ -30,12 +37,15 @@ vi.mock('@/import/sbi/full-balance-report-checkpoint-repository', () => ({
 import SbiBalanceReportPage from '@/app/imports/sbi/balance-report/page';
 
 describe('authenticated SBI balance report page', () => {
+  afterEach(cleanup);
+
   beforeEach(() => {
     mocks.resolvePageSessionPrincipal.mockReset();
     mocks.redirect.mockReset();
     mocks.listBrokerAccounts.mockReset();
     mocks.listRecentV1ForMerge.mockReset();
     mocks.listRecentV2ForMerge.mockReset();
+    mocks.getBatchTrace.mockReset();
     mocks.listBrokerAccounts.mockResolvedValue([]);
     mocks.listRecentV1ForMerge.mockResolvedValue([]);
     mocks.listRecentV2ForMerge.mockResolvedValue([]);
@@ -46,6 +56,41 @@ describe('authenticated SBI balance report page', () => {
     mocks.resolvePageSessionPrincipal.mockResolvedValue(null);
     await expect(SbiBalanceReportPage()).rejects.toThrow('NEXT_REDIRECT');
     expect(mocks.redirect).toHaveBeenCalledWith('/login');
+  });
+
+  it('passes a valid originating batch to the PDF inspector', async () => {
+    const principal = { authenticated: true };
+    mocks.resolvePageSessionPrincipal.mockResolvedValue(principal);
+    const batchId = '10000000-0000-4000-8000-000000000001';
+    mocks.getBatchTrace.mockResolvedValue({ batchId, brokerAccountId: '00000000-0000-4000-8000-000000000001' });
+    const page = await SbiBalanceReportPage({
+      searchParams: Promise.resolve({ batchId }),
+    });
+    expect(JSON.stringify(page)).toContain(`/imports/sbi/${batchId}`);
+    expect(mocks.getBatchTrace).toHaveBeenCalledWith({ principal, batchId });
+  });
+
+  it('falls back safely when the current user does not own the requested batch', async () => {
+    mocks.resolvePageSessionPrincipal.mockResolvedValue({ authenticated: true });
+    mocks.getBatchTrace.mockResolvedValue(null);
+    const batchId = '20000000-0000-4000-8000-000000000002';
+    const page = await SbiBalanceReportPage({ searchParams: Promise.resolve({ batchId }) });
+    expect(JSON.stringify(page)).not.toContain(`/imports/sbi/${batchId}`);
+  });
+
+  it('puts the originating batch SBI account first without exposing batch metadata', async () => {
+    mocks.resolvePageSessionPrincipal.mockResolvedValue({ authenticated: true });
+    const batchId = '10000000-0000-4000-8000-000000000001';
+    mocks.getBatchTrace.mockResolvedValue({ batchId, brokerAccountId: '2' });
+    mocks.listBrokerAccounts.mockResolvedValue([
+      { id: '1', broker: 'sbi', displayName: 'SBI口座1' },
+      { id: '2', broker: 'sbi', displayName: 'SBI口座2' },
+    ]);
+    const serialized = JSON.stringify(await SbiBalanceReportPage({
+      searchParams: Promise.resolve({ batchId }),
+    }));
+    expect(serialized.indexOf('SBI口座2')).toBeLessThan(serialized.indexOf('SBI口座1'));
+    expect(serialized).not.toContain('brokerAccountId');
   });
 
   it('renders the PDF inspector for an authenticated session', async () => {

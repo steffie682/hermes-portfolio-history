@@ -1,8 +1,8 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { resolvePageSessionPrincipal } from '@/auth/page-session';
-import { getAuthRuntime } from '@/auth/runtime';
 import { getDatabase } from '@/db/client';
+import { getImportRuntime } from '@/import/runtime';
 import { createBalanceReportSnapshotRepository } from '@/import/sbi/balance-report-snapshot-repository';
 import { createFullBalanceReportCheckpointRepository } from '@/import/sbi/full-balance-report-checkpoint-repository';
 import SbiBalanceReportClient from './client';
@@ -12,10 +12,21 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-export default async function SbiBalanceReportPage() {
+const BATCH_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export default async function SbiBalanceReportPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ batchId?: string }>;
+} = {}) {
   const principal = await resolvePageSessionPrincipal();
   if (!principal) return redirect('/login');
-  const runtime = await getAuthRuntime();
+  const batchId = (await searchParams)?.batchId;
+  const runtime = await getImportRuntime();
+  const batch = batchId && BATCH_ID.test(batchId)
+    ? await runtime.importRepository.getBatchTrace({ principal, batchId })
+    : null;
+  const returnHref = batch ? `/imports/sbi/${batch.batchId}` : '/imports/sbi';
   const db = getDatabase();
   const v1Repository = createBalanceReportSnapshotRepository(db);
   const v2Repository = createFullBalanceReportCheckpointRepository(db);
@@ -40,7 +51,12 @@ export default async function SbiBalanceReportPage() {
         });
   const accounts = allAccounts
     .filter((account) => account.broker === 'sbi')
-    .map(({ id, displayName }) => ({ id, displayName }));
+    .map(({ id, displayName }) => ({ id, displayName }))
+    .sort((left, right) => {
+      if (left.id === batch?.brokerAccountId) return -1;
+      if (right.id === batch?.brokerAccountId) return 1;
+      return 0;
+    });
   return (
     <main className="import-shell">
       <section className="import-card" aria-labelledby="sbi-balance-report-title">
@@ -52,6 +68,7 @@ export default async function SbiBalanceReportPage() {
         <SbiBalanceReportClient
           accounts={accounts}
           recentSnapshots={snapshots}
+          returnHref={returnHref}
         />
       </section>
     </main>

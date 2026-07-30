@@ -50,11 +50,13 @@ function releaseBytes(source: Uint8Array | null) {
 export default function SbiBalanceReportClient({
   accounts = [],
   recentSnapshots = [],
+  returnHref = '/imports/sbi',
   inspectPdf = inspectPdfInBrowser,
   runOcr = runSbiBrowserOcr,
 }: {
   accounts?: BalanceReportAccountSummary[];
   recentSnapshots?: SavedSnapshotSummary[];
+  returnHref?: string;
   inspectPdf?: (source: Uint8Array, signal: AbortSignal) => Promise<SafeReport>;
   runOcr?: (
     source: Uint8Array,
@@ -247,6 +249,11 @@ export default function SbiBalanceReportClient({
 
   return (
     <>
+      <p>
+        <Link className="balance-report-link" href={returnHref}>
+          {returnHref === '/imports/sbi' ? 'SBI CSV取込へ戻る' : '保存済みの取込作業へ戻る'}
+        </Link>
+      </p>
       {accounts.length === 0 ? (
         <p><Link href="/imports/sbi">SBI口座を作成してから続ける</Link></p>
       ) : null}

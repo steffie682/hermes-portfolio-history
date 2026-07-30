@@ -34,8 +34,10 @@ function hasPdfMagic(source: Uint8Array): boolean {
 
 export default function SbiDistributionReportClient({
   inspectPdf = inspectPdfInBrowser,
+  returnHref = '/imports/sbi',
 }: {
   inspectPdf?: (source: Uint8Array, signal: AbortSignal) => Promise<SafeReport>;
+  returnHref?: string;
 }) {
   const operationVersion = useRef(0);
   const activeInspection = useRef<AbortController | null>(null);
@@ -136,6 +138,11 @@ export default function SbiDistributionReportClient({
 
   return (
     <>
+      <p>
+        <Link className="balance-report-link" href={returnHref}>
+          {returnHref === '/imports/sbi' ? 'SBI CSV取込へ戻る' : '保存済みの取込作業へ戻る'}
+        </Link>
+      </p>
       <div className="import-file-panel">
         <p>
           取引履歴CSVで「分配金再投資」と表示されている取引に対応するSBIのPDFを1つだけ選んでください。
@@ -180,15 +187,14 @@ export default function SbiDistributionReportClient({
             </p>
           ) : null}
           <a className="safe-report-download" download="sbi-distribution-safe-structure.json" href={reportHref}>
-            安全な構造レポートを保存
+            診断用JSONを保存（任意）
           </a>
           <p className="preview-note">
-            この結果で確認できるのはPDFのレイアウトだけです。分配金額、税金、取得価額、再投資の会計処理、
-            保留中のインポート状態はまだ解決しません。
+            このJSONは取込用ではありません。金額・税金・取得価額を含まないため、読み込んでも取引は完成しません。
           </p>
-          <p className="preview-note">保存した安全なJSONだけを共有した後、実装を続けられます。</p>
-          <p className="preview-note">JSONを保存したら、SBI CSV取込画面へ戻って作業を続けてください。</p>
-          <Link className="balance-report-link" href="/imports/sbi">SBI CSV取込画面へ戻る</Link>
+          <p className="preview-note">
+            確認できるのはPDFのレイアウトだけです。実際の分配金・再投資情報は、保存済みの取込作業にある入力欄へ記録してください。
+          </p>
         </section>
       ) : null}
     </>
