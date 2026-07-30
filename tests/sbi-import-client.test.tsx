@@ -53,11 +53,35 @@ describe('SBI import client', () => {
     expect(screen.getByText('開始時点の保有残高が必要です')).toBeTruthy();
     expect(screen.getByText('再投資口数の準備 1 / 1件')).toBeTruthy();
     expect(screen.getByText('分配金・税・取得価額の詳細が必要です')).toBeTruthy();
-    expect(screen.getByRole('link', { name: '分配金・再投資PDFの構造を確認する' }).getAttribute('href'))
-      .toBe('/imports/sbi/distribution-report');
-    expect(screen.getByRole('link', { name: '取引残高報告書を確認する' }).getAttribute('href')).toBe('/imports/sbi/balance-report');
+    expect(screen.queryByRole('link', { name: '分配金・再投資PDFの構造を確認する' })).toBeNull();
+    expect(screen.queryByRole('link', { name: '開始時点または最新の取引残高報告書を1つずつ確認する' })).toBeNull();
+    expect(screen.getByText(/先に非公開で保存して取込作業を作成/)).toBeTruthy();
     expect(screen.getByRole('button', { name: '非公開で保存して確認' }).hasAttribute('disabled')).toBe(false);
     expect(screen.getByRole('button', { name: '取込を確定' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('offers batch-bound evidence routes only after the CSV is durably staged', async () => {
+    const batchId = '10000000-0000-4000-8000-000000000001';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        batchId,
+        disposition: 'new',
+        counts: { new: 1, duplicate: 0, needsReview: 1, rejected: 0 },
+      }),
+    }));
+    renderClient();
+    choose(fileLike(csvBytes(['株式現物買', '分配金再投資'])));
+    expect(await screen.findByText('取引 2件')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '非公開で保存して確認' }));
+    expect(await screen.findByText('新規 1件')).toBeTruthy();
+
+    expect(screen.getByRole('link', { name: '保存済みの取込作業を続ける' }).getAttribute('href'))
+      .toBe(`/imports/sbi/${batchId}`);
+    expect(screen.getByRole('link', { name: '分配金・再投資PDFの構造を確認する' }).getAttribute('href'))
+      .toBe(`/imports/sbi/distribution-report?batchId=${batchId}`);
+    expect(screen.getByRole('link', { name: '開始時点または最新の取引残高報告書を1つずつ確認する' }).getAttribute('href'))
+      .toBe(`/imports/sbi/balance-report?batchId=${batchId}`);
   });
 
   it('stages four preview statuses and commits supported events once', async () => {
@@ -88,7 +112,7 @@ describe('SBI import client', () => {
     expect(screen.getByText('重複 0件')).toBeTruthy();
     expect(screen.getByText('要確認 0件')).toBeTruthy();
     expect(screen.getByText('拒否 0件')).toBeTruthy();
-    expect(screen.getByRole('link', { name: '原本行との対応を確認' }).getAttribute('href'))
+    expect(screen.getByRole('link', { name: '保存済みの取込作業を続ける' }).getAttribute('href'))
       .toBe('/imports/sbi/10000000-0000-4000-8000-000000000001');
 
     fireEvent.click(screen.getByRole('button', { name: '取込を確定' }));
@@ -318,6 +342,23 @@ describe('SBI import client', () => {
     expect(screen.queryByText('確定済み 1件')).toBeNull();
   });
 
+
+  it('rejects a malformed staging batch id before constructing navigation links', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        batchId: 'not-a-safe-batch-id',
+        disposition: 'new',
+        counts: { new: 1, duplicate: 0, needsReview: 0, rejected: 0 },
+      }),
+    }));
+    renderClient();
+    choose(fileLike(csvBytes(['株式現物買'])));
+    expect(await screen.findByText('取引 1件')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '非公開で保存して確認' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('非公開保存サービスに接続できませんでした');
+    expect(screen.queryByRole('link', { name: '保存済みの取込作業を続ける' })).toBeNull();
+  });
 
   it('shows an actionable message for a server-rejected CSV', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({

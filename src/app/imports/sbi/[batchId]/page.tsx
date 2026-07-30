@@ -3,6 +3,7 @@ import { notFound, redirect } from 'next/navigation';
 import { resolvePageSessionPrincipal } from '@/auth/page-session';
 import { getImportRuntime } from '@/import/runtime';
 import { importReasonLabel } from '@/import/reason-label';
+import { BatchCommitButton } from './batch-commit-button';
 import { DistributionDetailsForm } from './distribution-details-form';
 
 export const metadata = {
@@ -68,6 +69,23 @@ export default async function ImportTracePage({
         <h1 id="trace-title">取込内容と原本行の対応</h1>
         <p>表示した取引が、保存済みCSVの何行目から作られたかを確認できます。</p>
         <p>状態: {trace.status === 'committed' ? '確定済み' : '確定前'}</p>
+        {trace.status === 'preview_ready' ? (
+          <section className="import-file-panel" aria-label="この取込作業の次の操作">
+            <h2>この取込作業を続ける</h2>
+            <p>CSVは保存済みです。追加資料を確認したあとも、この画面へ戻ればCSVを選び直す必要はありません。</p>
+            {trace.rows.some(isEligibleDistributionRow) ? (
+              <Link className="balance-report-link" href={`/imports/sbi/distribution-report?batchId=${trace.batchId}`}>
+                分配金・再投資PDFの構造を確認する
+              </Link>
+            ) : null}
+            <Link className="balance-report-link" href={`/imports/sbi/balance-report?batchId=${trace.batchId}`}>
+              残高の証拠を追加（任意）
+            </Link>
+            <p className="preview-note">
+              開始時点または最新の取引残高報告書を1つずつ確認できます。基準日時点の証拠として保存しますが、この取込期間との自動照合はまだ行わないため、基準日を本人が確認してください。
+            </p>
+          </section>
+        ) : null}
         <ol>
           {trace.rows.map((row) => (
             <li key={row.locator} className="cash-readiness">
@@ -88,7 +106,8 @@ export default async function ImportTracePage({
             </li>
           ))}
         </ol>
-        <p><Link href="/imports/sbi">SBI CSV取込へ戻る</Link></p>
+        {trace.status === 'preview_ready' ? <BatchCommitButton batchId={trace.batchId} /> : null}
+        <p><Link href="/imports/sbi">別のCSV取込を開始する</Link></p>
       </section>
     </main>
   );

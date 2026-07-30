@@ -59,6 +59,12 @@ describe('import trace page', () => {
     expect(screen.getByRole('button', { name: '再投資詳細を保存' })).toBeTruthy();
     expect(screen.getByText(/PDFはアップロードされません/)).toBeTruthy();
     expect(screen.getByText(/総分配金と源泉徴収額は未解決/)).toBeTruthy();
+    const batchId = '10000000-0000-4000-8000-000000000001';
+    expect(screen.getByRole('link', { name: '分配金・再投資PDFの構造を確認する' }).getAttribute('href'))
+      .toBe(`/imports/sbi/distribution-report?batchId=${batchId}`);
+    expect(screen.getByRole('link', { name: '残高の証拠を追加（任意）' }).getAttribute('href'))
+      .toBe(`/imports/sbi/balance-report?batchId=${batchId}`);
+    expect(screen.getByRole('button', { name: '取込を確定' })).toBeTruthy();
   });
 
   it('does not expose a form for committed or noneligible rows', async () => {

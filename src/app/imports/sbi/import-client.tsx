@@ -16,6 +16,19 @@ type ServerPreview = {
   counts: { new: number; duplicate: number; needsReview: number; rejected: number };
 };
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isServerPreview(value: unknown): value is ServerPreview {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as { batchId?: unknown; disposition?: unknown; counts?: unknown };
+  if (typeof candidate.batchId !== 'string' || !UUID.test(candidate.batchId)) return false;
+  if (candidate.disposition !== 'new' && candidate.disposition !== 'duplicate') return false;
+  if (!candidate.counts || typeof candidate.counts !== 'object') return false;
+  const counts = candidate.counts as Record<string, unknown>;
+  return ['new', 'duplicate', 'needsReview', 'rejected'].every((key) =>
+    Number.isSafeInteger(counts[key]) && (counts[key] as number) >= 0);
+}
+
 function apiErrorCode(body: unknown) {
   if (!body || typeof body !== 'object') return null;
   const error = (body as { error?: unknown }).error;
@@ -149,7 +162,7 @@ export default function SbiImportClient({ initialAccounts }: { initialAccounts: 
       );
       const body = await response.json() as ServerPreview | { error?: { code?: string } };
       if (version !== operationVersion.current) return;
-      if (!response.ok || !('batchId' in body)) throw new Error(apiErrorCode(body) ?? 'stage-failed');
+      if (!response.ok || !isServerPreview(body)) throw new Error(apiErrorCode(body) ?? 'stage-failed');
       setServerPreview(body);
       setCommittedCount(null);
       setStatus(body.disposition === 'duplicate'
@@ -251,10 +264,15 @@ export default function SbiImportClient({ initialAccounts }: { initialAccounts: 
           ) : preview.hasDeferredRows ? (
             <div className="import-warning" role="alert"><strong>未反映の取引が {preview.deferredRows}件あります</strong><p>対応が完成するまで、総資産を確定表示しません。</p></div>
           ) : <p className="import-ready-message">すべて自動計上候補として確認できました。</p>}
-          {reinvestmentAssessment?.requiresDistributionDetails ? (
-            <Link className="balance-report-link" href="/imports/sbi/distribution-report">分配金・再投資PDFの構造を確認する</Link>
+          {!serverPreview && (
+            reinvestmentAssessment?.requiresDistributionDetails
+            || cashAssessment?.requiresOpeningCheckpoint
+            || preview.supportCounts['needs-margin-ledger'] > 0
+          ) ? (
+            <p className="preview-note">
+              先に非公開で保存して取込作業を作成すると、CSVを選び直さずに追加資料の確認へ進めます。
+            </p>
           ) : null}
-          {preview.supportCounts['needs-margin-ledger'] > 0 ? <Link className="balance-report-link" href="/imports/sbi/balance-report">取引残高報告書を確認する</Link> : null}
           <button
             className="import-confirm"
             type="button"
@@ -271,9 +289,21 @@ export default function SbiImportClient({ initialAccounts }: { initialAccounts: 
             </div>
           ) : null}
           {serverPreview ? (
-            <Link className="balance-report-link" href={`/imports/sbi/${serverPreview.batchId}`}>
-              原本行との対応を確認
-            </Link>
+            <>
+              <Link className="balance-report-link" href={`/imports/sbi/${serverPreview.batchId}`}>
+                保存済みの取込作業を続ける
+              </Link>
+              {reinvestmentAssessment?.requiresDistributionDetails ? (
+                <Link className="balance-report-link" href={`/imports/sbi/distribution-report?batchId=${serverPreview.batchId}`}>
+                  分配金・再投資PDFの構造を確認する
+                </Link>
+              ) : null}
+              {cashAssessment?.requiresOpeningCheckpoint || preview.supportCounts['needs-margin-ledger'] > 0 ? (
+                <Link className="balance-report-link" href={`/imports/sbi/balance-report?batchId=${serverPreview.batchId}`}>
+                  開始時点または最新の取引残高報告書を1つずつ確認する
+                </Link>
+              ) : null}
+            </>
           ) : null}
           <button
             className="import-confirm"

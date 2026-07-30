@@ -55,6 +55,7 @@ describe('import repository', () => {
         batchId: first.batchId,
       })).resolves.toMatchObject({
         batchId: first.batchId,
+        brokerAccountId: input.brokerAccountId,
         rows: [
           {
             sourceRow: 2,
