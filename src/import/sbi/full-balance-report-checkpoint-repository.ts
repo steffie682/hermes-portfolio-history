@@ -1,8 +1,12 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { authenticatedPrincipalId, type AuthenticatedPrincipal } from '@/auth/session';
 import type { AppDatabase } from '@/db/client';
+import type { AssetEvidence, AssetEvidenceSectionKind, AssetEvidenceState } from '@/asset-summary/domain';
 import {
   brokerAccounts,
+  importBatches,
+  ledgerEvents,
+  stagedEvents,
   fullBalanceReportCashRows,
   fullBalanceReportCheckpoints,
   fullBalanceReportEntries,
@@ -170,6 +174,204 @@ export function createFullBalanceReportCheckpointRepository(db: AppDatabase) {
           })));
         }
         return { created: true as const, checkpoint: summary(inserted as never) };
+      });
+    },
+
+    async listLatestEvidence(principal: AuthenticatedPrincipal, limitAccounts = 10): Promise<AssetEvidence[]> {
+      const ownerUserId = authenticatedPrincipalId(principal);
+      return db.transaction(async (tx) => {
+        await tx.execute(sql`select set_config('app.current_user_id', ${ownerUserId}, true)`);
+        const validLimit = Number.isSafeInteger(limitAccounts) && limitAccounts > 0
+          ? limitAccounts
+          : 10;
+        const cappedLimit = Math.min(validLimit, 10);
+        const ranked = tx.$with('ranked_balance_evidence').as(
+          tx.select({
+            checkpointId: fullBalanceReportCheckpoints.id,
+            brokerAccountId: fullBalanceReportCheckpoints.brokerAccountId,
+            accountName: brokerAccounts.displayName,
+            statementDate: fullBalanceReportCheckpoints.statementDate,
+            createdAt: fullBalanceReportCheckpoints.createdAt,
+            evidenceRank: sql<number>`row_number() over (
+              partition by ${fullBalanceReportCheckpoints.brokerAccountId}
+              order by ${fullBalanceReportCheckpoints.statementDate} desc,
+                ${fullBalanceReportCheckpoints.createdAt} desc,
+                ${fullBalanceReportCheckpoints.id} desc
+            )`.as('evidence_rank'),
+          }).from(fullBalanceReportCheckpoints)
+            .innerJoin(brokerAccounts, and(
+              eq(brokerAccounts.id, fullBalanceReportCheckpoints.brokerAccountId),
+              eq(brokerAccounts.ownerUserId, fullBalanceReportCheckpoints.ownerUserId),
+            ))
+            .where(and(
+              eq(fullBalanceReportCheckpoints.ownerUserId, ownerUserId),
+              eq(brokerAccounts.ownerUserId, ownerUserId),
+              eq(brokerAccounts.broker, 'sbi'),
+            )),
+        );
+        const latest = await tx.with(ranked).select({
+          checkpointId: ranked.checkpointId,
+          brokerAccountId: ranked.brokerAccountId,
+          accountName: ranked.accountName,
+          statementDate: ranked.statementDate,
+          createdAt: ranked.createdAt,
+        }).from(ranked)
+          .where(eq(ranked.evidenceRank, 1))
+          .orderBy(
+            desc(ranked.statementDate), desc(ranked.createdAt), desc(ranked.checkpointId),
+          )
+          .limit(cappedLimit);
+        if (latest.length === 0) return [];
+        const checkpointIds = latest.map((row) => row.checkpointId);
+        const locator = {
+          sourcePage: fullBalanceReportEntries.sourcePage,
+          sourceRow: fullBalanceReportEntries.sourceRow,
+        };
+        const [cash, stocks, funds, margin, sectionRows] = await Promise.all([
+          tx.select({
+            checkpointId: fullBalanceReportCashRows.checkpointId,
+            sectionKind: fullBalanceReportCashRows.sectionKind,
+            kind: fullBalanceReportCashRows.sourceKind,
+            amount: fullBalanceReportCashRows.amount,
+            ...locator,
+          }).from(fullBalanceReportCashRows)
+            .innerJoin(fullBalanceReportEntries, eq(fullBalanceReportCashRows.entryId, fullBalanceReportEntries.id))
+            .where(and(
+              eq(fullBalanceReportCashRows.ownerUserId, ownerUserId),
+              inArray(fullBalanceReportCashRows.checkpointId, checkpointIds),
+            )).orderBy(fullBalanceReportCashRows.rowIndex),
+          tx.select({
+            checkpointId: fullBalanceReportStockLots.checkpointId,
+            securityCode: fullBalanceReportStockLots.securityCode,
+            securityName: fullBalanceReportStockLots.securityName,
+            quantity: fullBalanceReportStockLots.quantity,
+            evaluationAmount: fullBalanceReportStockLots.evaluationAmount,
+            ...locator,
+          }).from(fullBalanceReportStockLots)
+            .innerJoin(fullBalanceReportEntries, eq(fullBalanceReportStockLots.entryId, fullBalanceReportEntries.id))
+            .where(and(
+              eq(fullBalanceReportStockLots.ownerUserId, ownerUserId),
+              inArray(fullBalanceReportStockLots.checkpointId, checkpointIds),
+            )).orderBy(fullBalanceReportStockLots.rowIndex),
+          tx.select({
+            checkpointId: fullBalanceReportFundBalances.checkpointId,
+            securityCode: fullBalanceReportFundBalances.securityCode,
+            securityName: fullBalanceReportFundBalances.securityName,
+            units: fullBalanceReportFundBalances.units,
+            evaluationAmount: fullBalanceReportFundBalances.evaluationAmount,
+            ...locator,
+          }).from(fullBalanceReportFundBalances)
+            .innerJoin(fullBalanceReportEntries, eq(fullBalanceReportFundBalances.entryId, fullBalanceReportEntries.id))
+            .where(and(
+              eq(fullBalanceReportFundBalances.ownerUserId, ownerUserId),
+              inArray(fullBalanceReportFundBalances.checkpointId, checkpointIds),
+            )).orderBy(fullBalanceReportFundBalances.rowIndex),
+          tx.select({
+            checkpointId: fullBalanceReportMarginRows.checkpointId,
+            state: fullBalanceReportMarginRows.state,
+            side: fullBalanceReportMarginRows.side,
+            securityCode: fullBalanceReportMarginRows.securityCode,
+            securityName: fullBalanceReportMarginRows.securityName,
+            quantity: fullBalanceReportMarginRows.quantity,
+            unrealizedPnl: fullBalanceReportMarginRows.unrealizedPnl,
+            ...locator,
+          }).from(fullBalanceReportMarginRows)
+            .innerJoin(fullBalanceReportEntries, eq(fullBalanceReportMarginRows.entryId, fullBalanceReportEntries.id))
+            .where(and(
+              eq(fullBalanceReportMarginRows.ownerUserId, ownerUserId),
+              inArray(fullBalanceReportMarginRows.checkpointId, checkpointIds),
+            )).orderBy(fullBalanceReportMarginRows.rowIndex),
+          tx.select({
+            checkpointId: fullBalanceReportSections.checkpointId,
+            sectionKind: fullBalanceReportSections.sectionKind,
+            evidenceState: fullBalanceReportSections.evidenceState,
+          }).from(fullBalanceReportSections)
+            .where(and(
+              eq(fullBalanceReportSections.ownerUserId, ownerUserId),
+              inArray(fullBalanceReportSections.checkpointId, checkpointIds),
+            )),
+        ]);
+        const sectionKinds: AssetEvidenceSectionKind[] = [
+          'deposits', 'collateral', 'domesticStockLots', 'fundBalances', 'margin', 'futures', 'options',
+        ];
+        return latest.map((checkpoint): AssetEvidence => {
+          const matchedSections = sectionRows.filter((row) => row.checkpointId === checkpoint.checkpointId);
+          const sections = Object.fromEntries(matchedSections.map((row) => [
+            row.sectionKind, row.evidenceState,
+          ])) as Partial<Record<AssetEvidenceSectionKind, AssetEvidenceState>>;
+          if (sectionKinds.some((kind) => sections[kind] === undefined)) {
+            throw new Error('Incomplete balance evidence sections');
+          }
+          return {
+          checkpointId: checkpoint.checkpointId,
+          brokerAccountId: checkpoint.brokerAccountId,
+          accountName: checkpoint.accountName,
+          statementDate: checkpoint.statementDate,
+          sections: sections as Record<AssetEvidenceSectionKind, AssetEvidenceState>,
+          deposits: cash.filter((row) => row.checkpointId === checkpoint.checkpointId
+            && row.sectionKind === 'deposits').map((row) => ({
+              kind: 'cash_deposit', amount: row.amount,
+              sourcePage: row.sourcePage, sourceRow: row.sourceRow,
+            })),
+          collateral: cash.filter((row) => row.checkpointId === checkpoint.checkpointId
+            && row.sectionKind === 'collateral').map((row) => ({
+              kind: row.kind as AssetEvidence['collateral'][number]['kind'], amount: row.amount,
+              sourcePage: row.sourcePage, sourceRow: row.sourceRow,
+            })),
+          domesticStockLots: stocks.filter((row) => row.checkpointId === checkpoint.checkpointId)
+            .map((row) => ({
+              securityCode: row.securityCode, securityName: row.securityName, quantity: row.quantity,
+              evaluationAmount: row.evaluationAmount, sourcePage: row.sourcePage, sourceRow: row.sourceRow,
+            })),
+          fundBalances: funds.filter((row) => row.checkpointId === checkpoint.checkpointId)
+            .map((row) => ({
+              securityCode: row.securityCode, securityName: row.securityName, units: row.units,
+              evaluationAmount: row.evaluationAmount, sourcePage: row.sourcePage, sourceRow: row.sourceRow,
+            })),
+          margin: margin.filter((row) => row.checkpointId === checkpoint.checkpointId).map((row) => ({
+            state: row.state as 'open' | 'settled', side: row.side as 'buy' | 'sell',
+            securityCode: row.securityCode, securityName: row.securityName,
+            quantity: row.quantity, unrealizedPnl: row.unrealizedPnl,
+            sourcePage: row.sourcePage, sourceRow: row.sourceRow,
+          })),
+          };
+        });
+      });
+    },
+
+    async getImportReadiness(principal: AuthenticatedPrincipal) {
+      const ownerUserId = authenticatedPrincipalId(principal);
+      return db.transaction(async (tx) => {
+        await tx.execute(sql`select set_config('app.current_user_id', ${ownerUserId}, true)`);
+        const [ledger, needsReview, unresolvedDistribution, previewReady] = await Promise.all([
+          tx.select({ value: sql<number>`count(*)::int` }).from(ledgerEvents)
+            .where(eq(ledgerEvents.ownerUserId, ownerUserId)),
+          tx.select({ value: sql<number>`count(*)::int` }).from(stagedEvents)
+            .where(and(
+              eq(stagedEvents.ownerUserId, ownerUserId),
+              eq(stagedEvents.status, 'needs_review'),
+            )),
+          tx.select({ value: sql<number>`count(*)::int` }).from(stagedEvents)
+            .where(and(
+              eq(stagedEvents.ownerUserId, ownerUserId),
+              eq(stagedEvents.status, 'needs_review'),
+              eq(stagedEvents.reasonCode, 'needs-distribution-details'),
+            )),
+          tx.select({ value: sql<number>`count(*)::int` }).from(importBatches)
+            .where(and(
+              eq(importBatches.ownerUserId, ownerUserId),
+              eq(importBatches.status, 'preview_ready'),
+            )),
+        ]);
+        return {
+          ledgerEventCount: ledger[0]?.value ?? 0,
+          unresolvedDistributionCount: unresolvedDistribution[0]?.value ?? 0,
+          otherNeedsReviewCount: Math.max(
+            (needsReview[0]?.value ?? 0) - (unresolvedDistribution[0]?.value ?? 0),
+            0,
+          ),
+          previewReadyBatchCount: previewReady[0]?.value ?? 0,
+        };
       });
     },
 
