@@ -4,16 +4,16 @@ import { metadata } from '@/app/layout';
 import HomePage from '@/app/page';
 
 describe('HomePage', () => {
-  it('clearly reports that the production application is available', () => {
+  it('states the implemented scope without presenting the whole product as complete', () => {
     render(<HomePage />);
     expect(screen.getByRole('heading', { name: '資産履歴管理' })).toBeTruthy();
-    expect(screen.getByText('本番環境で利用できます')).toBeTruthy();
-    expect(screen.getByText(/SBI証券の取引履歴を安全に取り込み/)).toBeTruthy();
-    expect(screen.queryByText('基盤を構築中です')).toBeNull();
-    expect(screen.queryByText(/利用可能な金融機能はまだありません/)).toBeNull();
-    expect(metadata.description).not.toContain('開発中');
-    expect(
-      screen.getByRole('link', { name: 'ログイン・利用開始' }).getAttribute('href'),
-    ).toBe('/login');
+    expect(screen.getByText('SBI取込・残高証拠の確認版')).toBeTruthy();
+    expect(screen.getByText(/総資産・運用損益・配当集計はまだ未実装/)).toBeTruthy();
+    expect(screen.queryByText('本番環境で利用できます')).toBeNull();
+    expect(metadata.description).toContain('取込基盤');
+    expect(screen.getByRole('link', { name: '資産概要を見る' }).getAttribute('href'))
+      .toBe('/portfolio');
+    expect(screen.getByRole('link', { name: 'ログイン・利用開始' }).getAttribute('href'))
+      .toBe('/login');
   });
 });

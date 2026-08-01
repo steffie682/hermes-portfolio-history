@@ -177,6 +177,146 @@ describe('full balance report checkpoint repository', () => {
     }
   });
 
+  it('reads the latest normalized evidence with source locators for the principal only', async () => {
+    const context = await setup();
+    const richCheckpoint = validateFullBalanceReportCheckpoint({
+      ...checkpoint,
+      sourcePageCount: 4,
+      domesticStockLots: {
+        evidenceState: 'reported', zeroLocator: null, rows: [{
+          rowKind: 'acquisition_lot', securityCode: '7203', securityName: 'Synthetic Motor',
+          acquisitionDate: '2026-06-01', quantity: '10',
+          acquisitionUnitPriceState: 'reported', acquisitionUnitPrice: '2500',
+          purchaseAmountState: 'reported', purchaseAmount: '25000',
+          referencePrice: '2600', evaluationAmount: '26000', sourcePage: 2, sourceRow: 1,
+        }],
+      },
+      fundBalances: {
+        evidenceState: 'reported', zeroLocator: null, rows: [{
+          securityCode: '013.12', securityName: 'Synthetic Fund', units: '1000',
+          referencePrice: '12345', evaluationAmount: '12345', referencePriceUnit: '10000',
+          sourcePage: 3, sourceRow: 1,
+        }],
+      },
+      margin: {
+        evidenceState: 'reported', zeroLocator: null, rows: [{
+          state: 'open', securityCode: '9984', securityName: 'Synthetic Margin',
+          repaymentTermLabel: 'Synthetic Term', designationLabel: null, quantity: '5',
+          market: 'tokyo', side: 'buy', contractDate: '2026-06-01',
+          contractUnitPrice: '1000', currentPrice: '1100', fees: '10', unrealizedPnl: '490',
+          finalSettlementOrPlannedDate: '2026-12-01', sourcePage: 4, sourceRow: 1,
+        }],
+      },
+    });
+    try {
+      const otherPrincipal = (await resolveSessionPrincipal('synthetic-token-b', {
+        findActiveUserByTokenHash: async () => 'synthetic-owner-b',
+      }))!;
+      await context.repository.save(otherPrincipal, validateFullBalanceReportCheckpoint({
+        ...checkpoint,
+        brokerAccountId: '00000000-0000-4000-8000-000000000002',
+        deposits: { evidenceState: 'reported', zeroLocator: null, rows: [{
+          kind: 'cash_deposit', amount: '999999', sourcePage: 1, sourceRow: 1,
+        }] },
+      }));
+      const saved = await context.repository.save(context.principal, richCheckpoint);
+      const latest = await context.repository.listLatestEvidence(context.principal);
+
+      expect(latest).toEqual([{
+        checkpointId: saved.checkpoint.id,
+        brokerAccountId: '00000000-0000-4000-8000-000000000001',
+        accountName: 'Synthetic A',
+        statementDate: '2026-06-15',
+        sections: {
+          deposits: 'reported', collateral: 'explicit_zero', domesticStockLots: 'reported',
+          fundBalances: 'reported', margin: 'reported', futures: 'explicit_zero', options: 'explicit_zero',
+        },
+        deposits: [{ kind: 'cash_deposit', amount: '100.00', sourcePage: 1, sourceRow: 1 }],
+        collateral: [],
+        domesticStockLots: [{
+          securityCode: '7203', securityName: 'Synthetic Motor', quantity: '10.000000',
+          evaluationAmount: '26000.00', sourcePage: 2, sourceRow: 1,
+        }],
+        fundBalances: [{
+          securityCode: '013.12', securityName: 'Synthetic Fund', units: '1000.000000',
+          evaluationAmount: '12345.00', sourcePage: 3, sourceRow: 1,
+        }],
+        margin: [{
+          state: 'open', side: 'buy', securityCode: '9984', securityName: 'Synthetic Margin',
+          quantity: '5.000000', unrealizedPnl: '490.00', sourcePage: 4, sourceRow: 1,
+        }],
+      }]);
+      expect(latest[0]).not.toHaveProperty('ownerUserId');
+    } finally {
+      await context.client.close();
+    }
+  });
+
+  it('selects the newest checkpoint when the statement date is the same', async () => {
+    const context = await setup();
+    try {
+      await context.repository.save(context.principal, checkpoint);
+      await context.repository.save(context.principal, validateFullBalanceReportCheckpoint({
+        ...checkpoint,
+        deposits: { evidenceState: 'reported', zeroLocator: null, rows: [{
+          kind: 'cash_deposit', amount: '200', sourcePage: 1, sourceRow: 1,
+        }] },
+      }));
+      const latest = await context.repository.listLatestEvidence(context.principal);
+      expect(latest).toHaveLength(1);
+      expect(latest[0].deposits).toEqual([
+        { kind: 'cash_deposit', amount: '200.00', sourcePage: 1, sourceRow: 1 },
+      ]);
+    } finally {
+      await context.client.close();
+    }
+  });
+
+  it('limits after selecting evidence-bearing accounts and normalizes invalid limits', async () => {
+    const context = await setup();
+    const targetAccountId = '00000000-0000-4000-8000-000000000019';
+    try {
+      const oldAccounts = Array.from({ length: 9 }, (_, index) => {
+        const suffix = String(index + 10).padStart(12, '0');
+        return `('00000000-0000-4000-8000-${suffix}', 'synthetic-owner-a', 'sbi', 'Old ${index + 1}', '2020-01-01')`;
+      }).join(',');
+      await context.client.exec(`
+        insert into broker_accounts (id, owner_user_id, broker, display_name, created_at) values
+          ${oldAccounts},
+          ('${targetAccountId}', 'synthetic-owner-a', 'sbi', 'Evidence Account', '2027-01-01');
+      `);
+      await context.repository.save(context.principal, validateFullBalanceReportCheckpoint({
+        ...checkpoint,
+        brokerAccountId: targetAccountId,
+      }));
+
+      for (const invalidLimit of [Number.NaN, Number.POSITIVE_INFINITY, 1.5]) {
+        const latest = await context.repository.listLatestEvidence(context.principal, invalidLimit);
+        expect(latest).toHaveLength(1);
+        expect(latest[0]).toMatchObject({
+          brokerAccountId: targetAccountId,
+          accountName: 'Evidence Account',
+        });
+      }
+    } finally {
+      await context.client.close();
+    }
+  });
+
+  it('reports owner-scoped import readiness counts without financial values', async () => {
+    const context = await setup();
+    try {
+      await expect(context.repository.getImportReadiness(context.principal)).resolves.toEqual({
+        ledgerEventCount: 0,
+        unresolvedDistributionCount: 0,
+        otherNeedsReviewCount: 0,
+        previewReadyBatchCount: 0,
+      });
+    } finally {
+      await context.client.close();
+    }
+  });
+
   it('lists a minimal owner-scoped summary with no account or timestamp', async () => {
     const context = await setup();
     try {

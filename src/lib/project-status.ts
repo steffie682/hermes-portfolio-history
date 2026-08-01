@@ -1,8 +1,23 @@
 export type ProjectStatus = {
-  stage: 'foundation';
+  stage: 'evidence-overview';
   implementedFeatures: string[];
+  unimplementedFeatures: string[];
 };
 
 export function getProjectStatus(): ProjectStatus {
-  return { stage: 'foundation', implementedFeatures: [] };
+  return {
+    stage: 'evidence-overview',
+    implementedFeatures: [
+      'passkey-authentication',
+      'private-sbi-import',
+      'append-only-ledger',
+      'balance-evidence-overview',
+    ],
+    unimplementedFeatures: [
+      'total-assets',
+      'net-contributions',
+      'investment-profit-loss',
+      'dividend-yoc',
+    ],
+  };
 }

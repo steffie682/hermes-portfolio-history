@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveSessionPrincipal } from '@/auth/session';
 import type { AppDatabase } from '@/db/client';
 import { createImportRepository } from '@/import/repository';
+import { createFullBalanceReportCheckpointRepository } from '@/import/sbi/full-balance-report-checkpoint-repository';
 import { createMemoryPrivateSourceStorage } from '@/import/storage/memory-private-source-storage';
 import { applyAllMigrations } from './helpers/migrations';
 
@@ -148,6 +149,21 @@ describe('import repository', () => {
           (select count(*)::int from ledger_events) as ledger
       `);
       expect(counts.rows[0]).toEqual({ sources: 2, batches: 2, records: 7, events: 7, ledger: 1 });
+      const readinessRepository = createFullBalanceReportCheckpointRepository(
+        drizzle({ client }) as unknown as AppDatabase,
+      );
+      await expect(readinessRepository.getImportReadiness(principal!)).resolves.toEqual({
+        ledgerEventCount: 1,
+        unresolvedDistributionCount: 0,
+        otherNeedsReviewCount: 2,
+        previewReadyBatchCount: 0,
+      });
+      await expect(readinessRepository.getImportReadiness(otherPrincipal!)).resolves.toEqual({
+        ledgerEventCount: 0,
+        unresolvedDistributionCount: 0,
+        otherNeedsReviewCount: 0,
+        previewReadyBatchCount: 0,
+      });
       const stored = await client.query<{ storage_key: string }>('select storage_key from source_documents');
       expect(Array.from(storage.readForTest(stored.rows[0].storage_key)!)).toEqual(Array.from(bytes));
     } finally {

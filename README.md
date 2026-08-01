@@ -1,22 +1,34 @@
 # hermes-portfolio-history
 
-SBI証券などの証券帳票から、追跡可能な資産履歴台帳を構築するためのプロジェクトです。
+SBI証券の帳票を本人専用で取り込み、表示値から元の行まで追跡できる資産履歴サービスです。
 
 ## 現在の状態
 
-**開発基盤とPasskey認証・PostgreSQL RLSによるユーザー分離を実装中です。資産取込・計算などの金融機能はまだ実装されていません。**
+**SBI取込・残高証拠の確認版です。アプリ全体は未完成です。**
 
-現時点の成果物：
+実装済み:
 
-- Next.js + TypeScriptの最小アプリケーション
-- PostgreSQL / Drizzleのschemaとmigration
-- Passkey（WebAuthn）によるpasswordless認証
-- PostgreSQL RLSによるユーザー所有データの強制分離
-- hash保存session、期限付きchallenge、アカウント削除要求の土台
-- Vitest、ESLint、TypeScript、production buildの品質ゲート
-- GitHub Actions CI
-- `docs/INITIAL_DESIGN.md` — 初期アーキテクチャ、データモデル、計算定義、実装フェーズ
-- GitHub Issues — 実装ロードマップと受入条件
+- Passkey（WebAuthn）認証と期限付きhash session
+- PostgreSQL RLSとアプリ側owner条件による利用者分離
+- SBI口座登録、CSVのブラウザー内preview、明示操作後のprivate staging
+- 原本hashと経済event fingerprintによる重複防止
+- 原本・取込batch・元行・段階event・append-only台帳の追跡
+- 分配金再投資の通知書を見ながら行う追加情報確認
+- SBI取引残高報告書の端末内確認と、本人確認した残高checkpoint保存
+- `/portfolio`で最新checkpointの預り金・担保・国内株式・投信・信用建玉を区分別表示
+- 評価額欠損時のfail-closed表示と、原本ページ・行への追跡情報
+
+未実装:
+
+- 預り金・担保・信用建玉の会計関係を確定した総資産
+- 純入金、運用損益、日次資産推移、残高自動照合
+- 配当の税引前後集計、月年別推移、YOC
+- 市場価格・為替、TWR/XIRR、benchmark、他社証券
+- 全データexport
+
+## 重要な表示境界
+
+`/portfolio`は、本人が残高報告書を見て確認した原本記載値を行ごとに表示します。保存形式に通貨列がないため通貨を断定せず、区分内・区分間とも金額を合算しません。評価額の記載あり／欠損は件数で表示します。残高checkpointはCSV取込batchを自動照合・解決しません。
 
 ## 設計上の約束
 
@@ -26,17 +38,12 @@ SBI証券などの証券帳票から、追跡可能な資産履歴台帳を構�
 - 表示数値から原本の取込行まで追跡できるようにする
 - SBIのログイン情報を保存しない
 - 実データ、原本帳票、token、log、sessionをGitへ保存しない
-
-## 開発方針
-
-実装はIssue単位の短いfeature branchで進め、テスト通過後に`main`へ統合します。切り戻し単位は原則としてマージコミットまたはリリースタグとします。
+- 未実装機能を実装済みとして表示しない
 
 詳細は [`docs/INITIAL_DESIGN.md`](docs/INITIAL_DESIGN.md) を参照してください。
 
+## ローカル設定
 
-## 認証のローカル設定
-
-`.env.example`を参考に、runtime用`DATABASE_URL`、migration用`DATABASE_MIGRATION_URL`、32文字以上の`AUTH_SECRET`、`WEBAUTHN_ORIGIN`、`WEBAUTHN_RP_ID`をローカル環境へ設定します。Passkeyは本番ではHTTPSが必要です（`localhost`のみHTTP利用可）。session tokenとchallenge照合tokenはHttpOnly cookieに保持し、DBにはhashだけを保存します。
-
+`.env.example`を参考に、runtime用`DATABASE_URL`、migration用`DATABASE_MIGRATION_URL`、32文字以上の`AUTH_SECRET`、`WEBAUTHN_ORIGIN`、`WEBAUTHN_RP_ID`を設定します。Passkeyは本番ではHTTPSが必要です（`localhost`のみHTTP利用可）。session tokenとchallenge照合tokenはHttpOnly cookieに保持し、DBにはhashだけを保存します。
 
 PostgreSQL roleの分離と最小権限設定は [`docs/DATABASE_ROLES.md`](docs/DATABASE_ROLES.md) を参照してください。

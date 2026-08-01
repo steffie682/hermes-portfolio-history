@@ -1,30 +1,29 @@
 # PostgreSQL roles
 
-Use separate credentials for schema migration and the running application.
+Schema migrationと実行中アプリでは別credentialを使います。
 
-- `DATABASE_MIGRATION_URL`: owns the application schema and applies migration files.
-- `DATABASE_URL`: used by the Next.js runtime. It must be `NOSUPERUSER`, `NOBYPASSRLS`, and must not own tenant tables.
+- `DATABASE_MIGRATION_URL`: application schemaを所有し、migrationを適用するrole
+- `DATABASE_URL`: Next.js runtime用。`NOSUPERUSER`、`NOBYPASSRLS`、tenant tableの非ownerを必須とする
 
-Example outline (replace role names and set passwords through the deployment secret manager, never in Git):
+## Bootstrapで付与する権限
+
+passwordはGitへ書かず、deployment secret managerで設定します。初期bootstrapは接続とschema利用までに留めます。
 
 ```sql
 CREATE ROLE portfolio_migrator LOGIN NOSUPERUSER NOBYPASSRLS;
 CREATE ROLE portfolio_app LOGIN NOSUPERUSER NOBYPASSRLS;
 GRANT CONNECT ON DATABASE portfolio_history TO portfolio_app;
 GRANT USAGE ON SCHEMA public TO portfolio_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON
-  "user", auth_sessions, passkey_credentials, auth_challenges, broker_accounts,
-  private_source_objects, source_documents, import_batches, source_records,
-  staged_events, ledger_events
-  TO portfolio_app;
-GRANT SELECT, INSERT, DELETE ON device_enrollment_grants TO portfolio_app;
-REVOKE ALL ON
-  "user", auth_sessions, passkey_credentials, auth_challenges,
-  device_enrollment_grants, broker_accounts, private_source_objects,
-  source_documents, import_batches, source_records, staged_events, ledger_events
-  FROM PUBLIC;
 ```
 
-Run migrations as `portfolio_migrator`, then re-apply the runtime grants when migrations add tables. The application performs a startup check against `pg_roles` and refuses a runtime role with `rolsuper` or `rolbypassrls`. `broker_accounts`, `private_source_objects`, `source_documents`, `import_batches`, `source_records`, `staged_events`, and `ledger_events` use RLS and `FORCE ROW LEVEL SECURITY`; tenant queries set `app.current_user_id` transaction-locally from an opaque session-derived principal. Owner-inclusive composite foreign keys enforce tenant-consistent parent references independently of RLS. `private_source_objects` is the durable inventory for private Blob uploads. Automatic reconciliation retries only `cleanup_pending`; it never deletes a `pending_upload` merely because it is old, avoiding a race with a slow upload. Old `pending_upload` rows require operator investigation. Related broker-account and user deletion is blocked with `RESTRICT` until Blob cleanup and inventory removal complete.
+## Table権限の正本
 
-Production CI should exercise migrations and tenant-isolation tests against a real PostgreSQL service in addition to the fast PGlite tests.
+Tableごとの`GRANT`と`REVOKE`は、手作業の一括SQLではなく`drizzle/*/migration.sql`を正本とします。新しいtable追加時はmigration credentialでmigrationを適用してください。過去の広い権限が残る場合があるため、append-only tableではmigrationが明示的に広域権限を`REVOKE`した後、必要な`SELECT, INSERT`だけを再付与します。
+
+特に`ledger_events`、残高snapshot/checkpointとその子tableはappend-onlyです。runtime roleに`UPDATE`または`DELETE`を付与してはいけません。schema宣言だけで既存権限は狭まらないため、適用済み環境では最新のforward migrationまで実行し、`has_table_privilege`を使う実PostgreSQL integration testで確認します。
+
+`broker_accounts`、private import chain、ledger、残高証拠tableはRLSと`FORCE ROW LEVEL SECURITY`を使います。tenant queryはsession由来のopaque principalを`app.current_user_id`へtransaction-localに設定します。ownerを含むcomposite foreign keyで、同一owner内の別口座・別batchを混ぜる攻撃も拒否します。
+
+`private_source_objects`はprivate Blobのdurable inventoryです。自動reconciliationは`cleanup_pending`だけを再試行し、古いという理由だけで`pending_upload`を削除しません。Blob inventoryが残る間は関連口座・userの削除を`RESTRICT`します。
+
+CIではPGliteだけでなく、PostgreSQL service上でmigration、RLS、runtime ACL、append-only拒否を実行し、対象testがskipされていないことをlogで確認します。
