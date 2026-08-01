@@ -5,6 +5,7 @@ describe('CI PostgreSQL integration configuration', () => {
   it('provides the real PostgreSQL test database to npm test', async () => {
     const workflow = await readFile('.github/workflows/ci.yml', 'utf8');
 
+    expect(workflow).toContain('workflow_dispatch:');
     expect(workflow).toContain('services:');
     expect(workflow).toContain('image: postgres:16.4-bookworm@sha256:');
     expect(workflow).toContain('POSTGRES_DB: portfolio_history_test');
