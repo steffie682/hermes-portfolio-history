@@ -71,6 +71,13 @@ describe('full balance report checkpoint form', () => {
     expect(screen.getByText(/原本列「区分」/)).toBeTruthy();
   });
 
+  it('warns that an absent section is not explicit zero and defines the source row locator', () => {
+    render(<BalanceReportPositionForm sourcePageCount={7} accounts={accounts} />);
+    expect(screen.getByText(/区分自体が原本に載っていない場合は、0として扱わず保存しません/)).toBeTruthy();
+    fireEvent.click(screen.getAllByLabelText(/0と確認した/)[0]);
+    expect(screen.getByText(/記載行は、対象区分の表で見出しを除いて上から数えた明細番号/)).toBeTruthy();
+  });
+
   it('sends the exact synthetic settled margin payload and omits blank valuation cells', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       checkpoint: { id: '22222222-2222-4222-8222-222222222222', statementDate: '2026-06-15', rowCount: 1 },

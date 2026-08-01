@@ -169,6 +169,7 @@ export default function BalanceReportPositionForm({ accounts, sourcePageCount }:
         {name === 'domesticStockLots' ? <p>取得明細だけを入力し、括弧付きの銘柄別合計行は二重計上になるため入力しません。</p> : null}
         {name === 'margin' ? <p>区分欄に従い、未決済または決済ずみを明細ごとに選択してください。</p> : null}
         {modes[name] === 'zero' ? <>
+          <p>記載行は、対象区分の表で見出しを除いて上から数えた明細番号です。</p>
           <Field row={zeroLocators[name]} name="sourcePage" label={`${titles[name]}の0記載ページ`}
             type="number" max={sourcePageCount} onChange={(field, value) => changed(() =>
               setZeroLocators((all) => ({ ...all, [name]: { ...all[name], [field]: value } })))} />
@@ -276,6 +277,7 @@ export default function BalanceReportPositionForm({ accounts, sourcePageCount }:
     <h2 id="full-checkpoint-title">取引残高報告書を本人確認して保存</h2>
     <p>報告書基準日時点の汎用的な証拠です。開始残高・終了残高とは扱いません。</p>
     <p>PDFの生バイト、ファイル名、OCR出力、診断用の構造データはサーバーへ送信しません。ただし、このフォームへ手作業で転記した値はサーバーへ送信され、保存されます。</p>
+    <p className="asset-warning">0を選べるのは、対象区分が原本にあり、0と明記されている場合だけです。区分自体が原本に載っていない場合は、0として扱わず保存しません。</p>
     <form onSubmit={(event) => void save(event)}><fieldset disabled={saving}>
       <label>SBI口座<select value={brokerAccountId} onChange={(e) => changed(() => setBrokerAccountId(e.currentTarget.value))}>
         {accounts.map((account) => <option key={account.id} value={account.id}>{account.displayName}</option>)}
