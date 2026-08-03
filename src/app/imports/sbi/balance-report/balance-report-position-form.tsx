@@ -1,8 +1,10 @@
 'use client';
 
 import { Fragment, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { countBalanceReportOcrCandidates, type BalanceReportOcrCandidates } from '@/import/sbi/balance-report-ocr-candidates';
 
 export type BalanceReportAccountSummary = { id: string; displayName: string };
+
 export type SavedSnapshotSummary = {
   id: string; statementDate: string; rowCount?: number; positionCount?: number;
 };
@@ -119,18 +121,43 @@ function RowFields({ section, row, sourcePageCount, change }: {
       label="最終決済期日または決済予定日" type="date" onChange={change} /></>;
 }
 
-export default function BalanceReportPositionForm({ accounts, sourcePageCount }: {
+function rowsFromOcrCandidates(initial?: BalanceReportOcrCandidates): Record<SectionName, Draft[]> {
+  return {
+    deposits: [], collateral: [], margin: [],
+    domesticStockLots: initial?.domesticStockLots.map((row) => ({
+      securityCode: row.securityCode ?? '', securityName: row.securityName ?? '',
+      acquisitionDate: row.acquisitionDate ?? '', quantity: row.quantity ?? '',
+      rowKind: row.rowKind ?? 'acquisition_lot',
+      acquisitionUnitPriceState: row.acquisitionUnitPriceState ?? 'reported',
+      acquisitionUnitPrice: row.acquisitionUnitPrice ?? '',
+      purchaseAmountState: row.purchaseAmountState ?? 'reported', purchaseAmount: row.purchaseAmount ?? '',
+      referencePrice: row.referencePrice ?? '', evaluationAmount: row.evaluationAmount ?? '',
+      sourcePage: row.sourcePage ?? '', sourceRow: row.sourceRow ?? '',
+    })) ?? [],
+    fundBalances: initial?.fundBalances.map((row) => ({
+      securityCode: row.securityCode ?? '', securityName: row.securityName ?? '', units: row.units ?? '',
+      referencePrice: row.referencePrice ?? '', referencePriceUnit: row.referencePriceUnit ?? '',
+      evaluationAmount: row.evaluationAmount ?? '', sourcePage: row.sourcePage ?? '', sourceRow: row.sourceRow ?? '',
+    })) ?? [],
+  };
+}
+
+export default function BalanceReportPositionForm({ accounts, sourcePageCount, initialCandidates, onSaved }: {
   accounts: BalanceReportAccountSummary[];
   sourcePageCount: number;
+  initialCandidates?: BalanceReportOcrCandidates;
+  onSaved?: () => void;
 }) {
   const [brokerAccountId, setBrokerAccountId] = useState(accounts[0]?.id ?? '');
   const [statementDate, setStatementDate] = useState('');
-  const [modes, setModes] = useState<Record<SectionName, Mode>>({
-    deposits: '', collateral: '', domesticStockLots: '', fundBalances: '', margin: '',
-  });
-  const [rows, setRows] = useState<Record<SectionName, Draft[]>>({
-    deposits: [], collateral: [], domesticStockLots: [], fundBalances: [], margin: [],
-  });
+  const [modes, setModes] = useState<Record<SectionName, Mode>>(() => ({
+    deposits: '',
+    collateral: '',
+    domesticStockLots: initialCandidates?.domesticStockLots.length ? 'rows' : '',
+    fundBalances: initialCandidates?.fundBalances.length ? 'rows' : '',
+    margin: '',
+  }));
+  const [rows, setRows] = useState<Record<SectionName, Draft[]>>(() => rowsFromOcrCandidates(initialCandidates));
   const [zeroLocators, setZeroLocators] = useState<Record<SectionName | 'futures' | 'options', Draft>>({
     deposits: { sourcePage: '', sourceRow: '' },
     collateral: { sourcePage: '', sourceRow: '' },
@@ -262,6 +289,7 @@ export default function BalanceReportPositionForm({ accounts, sourcePageCount }:
             : '現在保存できません。時間をおいてもう一度お試しください。');
       } else {
         setSaved(result.checkpoint);
+        onSaved?.();
         setMessage(response.status === 200 ? '同じ確認内容はすでに保存されています。' : '確認した残高を保存しました。');
       }
     } catch {
@@ -276,7 +304,10 @@ export default function BalanceReportPositionForm({ accounts, sourcePageCount }:
   return <section className="safe-report-result" aria-labelledby="full-checkpoint-title">
     <h2 id="full-checkpoint-title">取引残高報告書を本人確認して保存</h2>
     <p>報告書基準日時点の汎用的な証拠です。開始残高・終了残高とは扱いません。</p>
-    <p>PDFの生バイト、ファイル名、OCR出力、診断用の構造データはサーバーへ送信しません。ただし、このフォームへ手作業で転記した値はサーバーへ送信され、保存されます。</p>
+    <p>PDFの生バイト、ファイル名、OCR出力、診断用の構造データはサーバーへ送信しません。ただし、このフォームへ入力またはOCR候補から反映し、本人が原本確認した値はサーバーへ送信され、保存されます。</p>
+    {initialCandidates && countBalanceReportOcrCandidates(initialCandidates) > 0 ? (
+      <p className="asset-warning">端末内OCRで完全に読めた国内株・投信だけを候補入力しました。OCRには誤認識があるため、保存前に全項目を原本と照合し、空欄のページ・行番号は原本から入力してください。</p>
+    ) : null}
     <p className="asset-warning">0を選べるのは、対象区分が原本にあり、0と明記されている場合だけです。区分自体が原本に載っていない場合は、0として扱わず保存しません。</p>
     <form onSubmit={(event) => void save(event)}><fieldset disabled={saving}>
       <label>SBI口座<select value={brokerAccountId} onChange={(e) => changed(() => setBrokerAccountId(e.currentTarget.value))}>

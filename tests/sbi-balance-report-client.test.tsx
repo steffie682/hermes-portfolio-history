@@ -386,18 +386,118 @@ describe('SBI balance report client', () => {
 
     fireEvent.change(screen.getByLabelText('終了ページ'), { target: { value: '5' } });
     fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
-    expect(await screen.findByText('OCRが完了しました（5ページ）')).toBeTruthy();
+    expect(await screen.findByText(/OCRが完了しました（1〜5ページ）/)).toBeTruthy();
     expect(screen.getByRole('link', { name: '診断用JSONを保存（任意）' })).toBeTruthy();
   });
 
-  it('wipes retained PDF bytes after OCR success', async () => {
+  it('keeps OCR candidates local and applies them only after an explicit review step', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ checkpoint: {
+      id: '33333333-3333-4333-8333-333333333333', statementDate: '2026-07-23', rowCount: 1,
+    } }), { status: 201, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetch);
+    const candidates = {
+      deposits: [], collateral: [], domesticStockLots: [], margin: [],
+      fundBalances: [{
+        _localId: 'LOCAL-ROW-ID-CANARY', unexpectedOcrBlockText: 'RAW-OCR-CANARY',
+        securityCode: '999.01', securityName: 'LOCAL-CANDIDATE-CANARY', units: '123',
+        referencePrice: '4567', referencePriceUnit: '10000', evaluationAmount: '89',
+        sourcePage: '', sourceRow: '',
+      }],
+    };
+    const runOcr = vi.fn().mockResolvedValue({ report: ocrReport, candidates });
+    render(<SbiBalanceReportClient
+      accounts={[{ id: '11111111-1111-4111-8111-111111111111', displayName: '合成SBI口座' }]}
+      inspectPdf={vi.fn().mockResolvedValue({ ...emptyReport, pageCount: 10 })}
+      runOcr={runOcr}
+    />);
+    choose(pdfFile());
+    await screen.findByRole('heading', { name: '端末内の日本語OCR' });
+    fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
+    expect(await screen.findByText(/端末内OCRの入力候補：1件/)).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: '取引残高報告書を本人確認して保存' })).toBeNull();
+    const diagnostic = screen.getByRole('link', { name: '診断用JSONを保存（任意）' }).getAttribute('href') ?? '';
+    expect(decodeURIComponent(diagnostic)).not.toContain('LOCAL-CANDIDATE-CANARY');
+
+    fireEvent.click(screen.getByRole('button', { name: '候補をフォームに反映' }));
+    expect(await screen.findByRole('heading', { name: '取引残高報告書を本人確認して保存' })).toBeTruthy();
+    expect((screen.getByLabelText('銘柄名') as HTMLInputElement).value).toBe('LOCAL-CANDIDATE-CANARY');
+    expect((screen.getByLabelText('口数') as HTMLInputElement).value).toBe('123');
+    expect((screen.getByLabelText('元PDFのページ') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('ページ内の明細番号（上から）') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText(/関係する全ページを元の報告書で確認/) as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText('SBI取引残高報告書PDF') as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText('開始ページ') as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText('終了ページ') as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '日本語OCRを開始' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'OCRをキャンセル' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '候補反映済み' }) as HTMLButtonElement).disabled).toBe(true);
+    const zeroRadios = screen.getAllByLabelText(/0と確認した/);
+    zeroRadios.forEach((radio, index) => { if (index !== 3) fireEvent.click(radio); });
+    const zeroPages = screen.getAllByLabelText(/0記載ページ$/);
+    const zeroRows = screen.getAllByLabelText(/0記載行$/);
+    expect(zeroPages).toHaveLength(6);
+    for (let index = 0; index < zeroPages.length; index += 1) {
+      fireEvent.change(zeroPages[index], { target: { value: '1' } });
+      fireEvent.change(zeroRows[index], { target: { value: String(index + 1) } });
+    }
+    fireEvent.change(screen.getByLabelText('報告書基準日'), { target: { value: '2026-07-23' } });
+    fireEvent.change(screen.getByLabelText('元PDFのページ'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('ページ内の明細番号（上から）'), { target: { value: '1' } });
+    fireEvent.click(screen.getByLabelText(/関係する全ページを元の報告書で確認/));
+    fireEvent.click(screen.getByRole('button', { name: '確認した全残高を保存' }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    const savedBody = fetch.mock.calls[0][1].body as string;
+    expect(savedBody).toContain('LOCAL-CANDIDATE-CANARY');
+    expect(savedBody).not.toContain('LOCAL-ROW-ID-CANARY');
+    expect(savedBody).not.toContain('RAW-OCR-CANARY');
+    expect(savedBody).not.toContain('rawItemCount');
+    expect(savedBody).not.toContain('masked-text');
+  });
+
+  it('accumulates distinct candidate batches and deduplicates a repeated security candidate', async () => {
+    const firstCandidates = {
+      deposits: [], collateral: [], domesticStockLots: [], margin: [],
+      fundBalances: [{ securityCode: '999.01', securityName: '合成候補A', units: '10', referencePrice: '100', referencePriceUnit: '10000', evaluationAmount: '1', sourcePage: '', sourceRow: '' }],
+    };
+    const secondCandidates = {
+      deposits: [], collateral: [], domesticStockLots: [], margin: [],
+      fundBalances: [
+        { ...firstCandidates.fundBalances[0] },
+        { securityCode: '999.02', securityName: '合成候補B', units: '20', referencePrice: '200', referencePriceUnit: '10000', evaluationAmount: '2', sourcePage: '', sourceRow: '' },
+      ],
+    };
+    const secondReport = { ...ocrReport, pages: ocrReport.pages.map((page) => ({ ...page, pageNumber: 6 })) };
+    const runOcr = vi.fn()
+      .mockResolvedValueOnce({ report: ocrReport, candidates: firstCandidates })
+      .mockResolvedValueOnce({ report: secondReport, candidates: secondCandidates });
+    render(<SbiBalanceReportClient
+      accounts={[{ id: '11111111-1111-4111-8111-111111111111', displayName: '合成SBI口座' }]}
+      inspectPdf={vi.fn().mockResolvedValue({ ...emptyReport, pageCount: 10 })}
+      runOcr={runOcr}
+    />);
+    choose(pdfFile());
+    await screen.findByRole('heading', { name: '端末内の日本語OCR' });
+    fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
+    expect(await screen.findByText(/端末内OCRの入力候補：1件/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('開始ページ'), { target: { value: '6' } });
+    fireEvent.change(screen.getByLabelText('終了ページ'), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
+    expect(await screen.findByText(/端末内OCRの入力候補：2件/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '候補をフォームに反映' }));
+    expect(await screen.findAllByLabelText('銘柄名')).toHaveLength(2);
+    expect(runOcr).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains PDF bytes for another OCR batch and wipes them on cancel', async () => {
     const source = new Uint8Array([37, 80, 68, 70, 45, 7]);
     const runOcr = vi.fn().mockResolvedValue(ocrReport);
     render(<SbiBalanceReportClient inspectPdf={vi.fn().mockResolvedValue(emptyReport)} runOcr={runOcr} />);
     choose({ size: source.length, arrayBuffer: vi.fn().mockResolvedValue(source.buffer) } as unknown as File);
     await screen.findByRole('heading', { name: '端末内の日本語OCR' });
     fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
-    await screen.findByText('OCRが完了しました（1ページ）');
+    await screen.findByText(/OCRが完了しました（1〜1ページ）/);
+    expect([...source]).toEqual([37, 80, 68, 70, 45, 7]);
+    fireEvent.click(screen.getByRole('button', { name: 'OCRをキャンセル' }));
     expect([...source]).toEqual([0, 0, 0, 0, 0, 0]);
   });
 
@@ -483,11 +583,14 @@ describe('SBI balance report client', () => {
       inspectPdf={vi.fn().mockResolvedValue(fullPdfReport)}
       runOcr={runOcr}
     />);
-    choose(pdfFile());
+    const source = new Uint8Array([37, 80, 68, 70, 45, 9]);
+    choose({ size: source.length, arrayBuffer: vi.fn().mockResolvedValue(source.buffer) } as unknown as File);
     await screen.findByRole('heading', { name: '端末内の日本語OCR' });
     fireEvent.change(screen.getByLabelText('開始ページ'), { target: { value: '6' } });
     fireEvent.change(screen.getByLabelText('終了ページ'), { target: { value: '10' } });
     fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
+    await screen.findByText(/OCRが完了しました（6〜10ページ）/);
+    fireEvent.click(screen.getByRole('button', { name: '候補をフォームに反映' }));
     await screen.findByRole('heading', { name: '取引残高報告書を本人確認して保存' });
     expect(runOcr.mock.calls[0][1]).toEqual({ startPage: 6, endPage: 10 });
 
@@ -500,6 +603,8 @@ describe('SBI balance report client', () => {
     fireEvent.click(screen.getByRole('button', { name: '確認した全残高を保存' }));
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     expect(JSON.parse(fetch.mock.calls[0][1].body).sourcePageCount).toBe(10);
+    await waitFor(() => expect([...source]).toEqual([0, 0, 0, 0, 0, 0]));
+    expect(screen.queryByRole('heading', { name: '端末内の日本語OCR' })).toBeNull();
   });
 
   it('does not expose the save form after OCR finds only a generic known label', async () => {

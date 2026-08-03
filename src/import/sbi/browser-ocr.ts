@@ -1,3 +1,4 @@
+import { extractBalanceReportOcrCandidates, emptyBalanceReportOcrCandidates, mergeBalanceReportOcrCandidates, type BalanceReportOcrCandidates, type OcrCandidateBlock } from './balance-report-ocr-candidates';
 const MAX_SOURCE_PAGES = 100;
 export const MAX_OCR_PAGES = 5;
 const OCR_SCALE = 2.5;
@@ -25,7 +26,7 @@ interface PdfLoadingTask {
 }
 
 interface OcrWorker {
-  recognize(canvas: HTMLCanvasElement): Promise<{ data: { text: string } }>;
+  recognize(canvas: HTMLCanvasElement, options?: Record<string, unknown>, output?: Record<string, boolean>): Promise<{ data: { text: string; blocks?: OcrCandidateBlock[] | null } }>;
   terminate(): Promise<unknown>;
 }
 
@@ -272,6 +273,18 @@ function clearCanvas(canvas: HTMLCanvasElement | null) {
   }
 }
 
+
+function clearRecognitionData(data: { text: string; blocks?: OcrCandidateBlock[] | null }) {
+  data.text = '';
+  if (data.blocks) data.blocks.length = 0;
+  data.blocks = null;
+}
+
+export interface SbiBrowserOcrResult {
+  report: ReturnType<ReturnType<typeof import('./ocr-safe-report')['createSbiOcrSafeReportBuilder']>['finish']>;
+  candidates: BalanceReportOcrCandidates;
+}
+
 export async function runSbiBrowserOcr(
   source: Uint8Array,
   range: { startPage: number; endPage: number },
@@ -304,6 +317,7 @@ export async function runSbiBrowserOcr(
   let canvas: HTMLCanvasElement | null = null;
   let page: PdfPage | null = null;
   const safeReport = createSbiOcrSafeReportBuilder();
+  let candidates = emptyBalanceReportOcrCandidates();
   let renderedPixels = 0;
   let completed = false;
   const terminateWorker = () => {
@@ -387,16 +401,22 @@ export async function runSbiBrowserOcr(
       await raceAbort(renderTask.promise, signal);
       renderTask = null;
       signal.throwIfAborted();
-      const recognitionPromise = worker.recognize(canvas);
+      const recognitionPromise = worker.recognize(canvas, {}, { text: true, blocks: true });
       void recognitionPromise.then(
         (lateResult) => {
-          if (signal.aborted) lateResult.data.text = '';
+          if (signal.aborted) clearRecognitionData(lateResult.data);
         },
         () => undefined,
       );
       const result = await raceAbort(recognitionPromise, signal);
       try {
         signal.throwIfAborted();
+        candidates = mergeBalanceReportOcrCandidates(candidates, extractBalanceReportOcrCandidates([{
+          pageNumber,
+          width: canvas.width,
+          height: canvas.height,
+          blocks: result.data.blocks ?? null,
+        }]));
         safeReport.addPage({
           pageNumber,
           width: baseViewport.width,
@@ -404,7 +424,7 @@ export async function runSbiBrowserOcr(
           text: result.data.text,
         });
       } finally {
-        result.data.text = '';
+        clearRecognitionData(result.data);
       }
       canvas.width = 0;
       canvas.height = 0;
@@ -415,7 +435,7 @@ export async function runSbiBrowserOcr(
     }
     const report = safeReport.finish();
     completed = true;
-    return report;
+    return { report, candidates };
   } catch (error) {
     if (signal.aborted) throw abortError(signal);
     throw error;
