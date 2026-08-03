@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 describe('production migration workflow', () => {
   const workflow = readFileSync('.github/workflows/production-migration.yml', 'utf8');
   const vercel = JSON.parse(readFileSync('vercel.json', 'utf8'));
+  const runner = readFileSync('scripts/migrate-production-locked.mjs', 'utf8');
 
   it('serializes exact reviewed commits and uses only the dedicated migration secret', () => {
     expect(workflow).toContain('group: production-database-migration');
@@ -19,6 +20,11 @@ describe('production migration workflow', () => {
     expect(workflow).not.toMatch(/DATABASE_URL[^_]/);
     expect(workflow).toContain('node release/scripts/migrate-production-locked.mjs');
     expect(workflow).not.toContain('node candidate/scripts');
+  });
+
+  it('logs only a safe stage and SQLSTATE classification on migration failure', () => {
+    expect(runner).toContain('stage=${stage}, sqlstate=${sqlState}');
+    expect(runner).not.toMatch(/console\.error\([^)]*(cause|url|message)/);
   });
 
   it('pins Vercel to the npm lifecycle that was verified by builds', () => {
