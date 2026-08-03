@@ -1,0 +1,66 @@
+name: Production database migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed_commit:
+        description: Exact 40-character reviewed commit SHA containing the migration
+        required: true
+        type: string
+      confirmation:
+        description: Type MIGRATE_PRODUCTION
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-database-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - name: Fail closed unless dispatched from main with exact inputs
+        env:
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          if [[ "$GITHUB_REF" != 'refs/heads/main' ]]; then
+            echo 'Production migration workflow must be dispatched from main' >&2
+            exit 1
+          fi
+          if [[ "$CONFIRMATION" != 'MIGRATE_PRODUCTION' ]]; then
+            echo 'confirmation must exactly equal MIGRATE_PRODUCTION' >&2
+            exit 1
+          fi
+          if [[ ! "$REVIEWED_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'reviewed_commit must be an exact lowercase 40-character SHA' >&2
+            exit 1
+          fi
+      - name: Check out trusted release runner at the immutable workflow SHA
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: release
+          persist-credentials: false
+      - name: Check out reviewed migration candidate without executing it
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.reviewed_commit }}
+          path: candidate
+          persist-credentials: false
+      - name: Verify checkout identity
+        env:
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+        run: test "$(git -C candidate rev-parse HEAD)" = "$REVIEWED_COMMIT"
+      - name: Install trusted runner dependencies
+        run: npm ci --prefix release
+      - name: Apply reviewed migrations under a PostgreSQL advisory lock
+        env:
+          DATABASE_MIGRATION_URL: ${{ secrets.DATABASE_MIGRATION_URL }}
+        run: node release/scripts/migrate-production-locked.mjs "$GITHUB_WORKSPACE/candidate/drizzle"
