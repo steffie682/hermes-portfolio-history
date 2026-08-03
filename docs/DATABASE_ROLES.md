@@ -27,3 +27,15 @@ Tableごとの`GRANT`と`REVOKE`は、手作業の一括SQLではなく`drizzle/
 `private_source_objects`はprivate Blobのdurable inventoryです。自動reconciliationは`cleanup_pending`だけを再試行し、古いという理由だけで`pending_upload`を削除しません。Blob inventoryが残る間は関連口座・userの削除を`RESTRICT`します。
 
 CIではPGliteだけでなく、PostgreSQL service上でmigration、RLS、runtime ACL、append-only拒否を実行し、対象testがskipされていないことをlogで確認します。
+
+## Production migration release
+
+Production migrationはGitHub Actionsの`Production database migration`を手動実行します。
+
+- GitHubの`production` environment secretへ、schema owner用の`DATABASE_MIGRATION_URL`だけを登録します。Production environmentはmain branch限定かつrequired reviewer付きにします。
+- runtime用`DATABASE_URL`をmigrationへ流用しません。
+- inputには独立review済みcommitの40文字SHAと`MIGRATE_PRODUCTION`を指定します。
+- workflowはmain上の信頼済みrunnerを使い、candidateからは`drizzle/`だけを読みます。
+- PostgreSQL advisory lockをmigration journalの確認前に取得し、DDLとjournal記録が終わるまで保持します。同時実行workflowもActions concurrencyで直列化します。
+- migration成功後に、同じcommitのfeature PRをmergeしてproduction deployします。migrationは旧アプリと後方互換でなければなりません。
+- `vercel.json`でBuild Commandを`npm run build`へ固定します。production build内でschema-owner credentialは使用しません。
