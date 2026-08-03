@@ -48,6 +48,7 @@ export default async function SbiBalanceReportPage({
           id: snapshot.id,
           statementDate: snapshot.statementDate,
           rowCount: snapshot.rowCount,
+          unresolvedSectionCount: snapshot.unresolvedSectionCount,
         });
   const accounts = allAccounts
     .filter((account) => account.broker === 'sbi')

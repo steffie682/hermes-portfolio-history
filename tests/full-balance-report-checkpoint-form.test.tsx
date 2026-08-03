@@ -33,7 +33,7 @@ describe('full balance report checkpoint form', () => {
     fireEvent.change(screen.getByLabelText('報告書基準日'), { target: { value: '2026-06-15' } });
     confirmAllSectionsAsZero();
     fireEvent.click(screen.getByLabelText(/関係する全ページを元の報告書で確認/));
-    fireEvent.click(screen.getByRole('button', { name: '確認した全残高を保存' }));
+    fireEvent.click(screen.getByRole('button', { name: '確認した残高証拠を保存' }));
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     const body = JSON.parse(fetch.mock.calls[0][1].body);
     expect(fetch.mock.calls[0][0]).toBe('/api/imports/sbi/full-balance-report-checkpoints');
@@ -58,6 +58,34 @@ describe('full balance report checkpoint form', () => {
       deposits: [], collateral: [], domesticStockLots: [], fundBalances: [], margin: [], limitReached: true,
     }} />);
     expect(screen.queryByText(/国内株・投信だけを候補入力しました/)).toBeNull();
+  });
+
+  it('saves a reviewed nonzero margin section as unresolved without creating zero evidence', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      checkpoint: { id: '22222222-2222-4222-8222-222222222222', statementDate: '2026-06-15', rowCount: 0, unresolvedSectionCount: 1 },
+    }), { status: 201, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetch);
+    render(<BalanceReportPositionForm sourcePageCount={7} accounts={accounts} />);
+    fireEvent.change(screen.getByLabelText('報告書基準日'), { target: { value: '2026-06-15' } });
+    for (const radio of screen.getAllByLabelText(/0と確認した/)) fireEvent.click(radio);
+    fireEvent.click(screen.getByLabelText(/信用取引の建玉残高.*今回は明細未入力/));
+    const pages = screen.getAllByLabelText(/0記載ページ$/);
+    const rows = screen.getAllByLabelText(/0記載行$/);
+    expect(pages).toHaveLength(6);
+    for (let index = 0; index < 6; index += 1) {
+      fireEvent.change(pages[index], { target: { value: '1' } });
+      fireEvent.change(rows[index], { target: { value: String(index + 1) } });
+    }
+    fireEvent.click(screen.getByLabelText(/関係する全ページを元の報告書で確認/));
+    const save = screen.getByRole('button', { name: '確認した残高証拠を保存' });
+    expect((save as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    const body = JSON.parse(fetch.mock.calls[0][1].body);
+    expect(body.margin).toEqual({ evidenceState: 'missing', zeroLocator: null, rows: [] });
+    expect(JSON.stringify(body.margin)).not.toMatch(/explicit_zero|sourcePage|sourceRow/);
+    expect(await screen.findByText('直近の保存：2026-06-15・明細未入力の区分1件')).toBeTruthy();
+    expect(screen.queryByText(/直近の保存：.*明細0件/)).toBeNull();
   });
 
   it('states the exact privacy boundary and constrains every source page to the inspected report', () => {
@@ -112,7 +140,7 @@ describe('full balance report checkpoint form', () => {
       target: { value: '2026-06-16' },
     });
     fireEvent.click(screen.getByLabelText(/関係する全ページを元の報告書で確認/));
-    fireEvent.click(screen.getByRole('button', { name: '確認した全残高を保存' }));
+    fireEvent.click(screen.getByRole('button', { name: '確認した残高証拠を保存' }));
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     expect(JSON.parse(fetch.mock.calls[0][1].body).margin.rows).toEqual([{
       state: 'settled',
@@ -143,7 +171,7 @@ describe('full balance report checkpoint form', () => {
     fireEvent.change(screen.getByLabelText('取得単価の原本状態'), { target: { value: 'masked' } });
     fireEvent.change(screen.getByLabelText('買付金額の原本状態'), { target: { value: 'absent' } });
     fireEvent.click(screen.getByLabelText(/関係する全ページを元の報告書で確認/));
-    fireEvent.click(screen.getByRole('button', { name: '確認した全残高を保存' }));
+    fireEvent.click(screen.getByRole('button', { name: '確認した残高証拠を保存' }));
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     expect(JSON.parse(fetch.mock.calls[0][1].body).domesticStockLots.rows).toEqual([{
       rowKind: 'acquisition_lot',

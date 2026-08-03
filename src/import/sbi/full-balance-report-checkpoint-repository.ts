@@ -34,6 +34,7 @@ const summarySelection = {
   domesticStockLotCount: fullBalanceReportCheckpoints.domesticStockLotCount,
   fundBalanceCount: fullBalanceReportCheckpoints.fundBalanceCount,
   marginCount: fullBalanceReportCheckpoints.marginCount,
+  unresolvedSectionCount: fullBalanceReportCheckpoints.unresolvedSectionCount,
 };
 
 const mergeSelection = {
@@ -45,12 +46,14 @@ function summary(row: typeof summarySelection extends Record<string, infer T> ? 
   const value = row as unknown as {
     id: string; statementDate: string; depositCount: number; collateralCount: number;
     domesticStockLotCount: number; fundBalanceCount: number; marginCount: number;
+    unresolvedSectionCount: number;
   };
   return {
     id: value.id,
     statementDate: value.statementDate,
     rowCount: value.depositCount + value.collateralCount + value.domesticStockLotCount
       + value.fundBalanceCount + value.marginCount,
+    unresolvedSectionCount: value.unresolvedSectionCount,
   };
 }
 
@@ -69,6 +72,8 @@ export function createFullBalanceReportCheckpointRepository(db: AppDatabase) {
           )).limit(1);
         if (!account) throw new FullBalanceReportCheckpointRepositoryError('invalid_account');
 
+        const unresolvedSectionCount = [input.deposits, input.collateral, input.domesticStockLots,
+          input.fundBalances, input.margin].filter((section) => section.evidenceState === 'missing').length;
         const [inserted] = await tx.insert(fullBalanceReportCheckpoints).values({
           ownerUserId, brokerAccountId: account.id, statementDate: input.statementDate, fingerprint,
           sourcePageCount: input.sourcePageCount,
@@ -78,7 +83,7 @@ export function createFullBalanceReportCheckpointRepository(db: AppDatabase) {
           collateralCount: input.collateral.rows.length,
           domesticStockLotCount: input.domesticStockLots.rows.length,
           fundBalanceCount: input.fundBalances.rows.length,
-          marginCount: input.margin.rows.length,
+          marginCount: input.margin.rows.length, unresolvedSectionCount,
         }).onConflictDoNothing({
           target: [fullBalanceReportCheckpoints.ownerUserId, fullBalanceReportCheckpoints.fingerprint],
         }).returning(summarySelection);
@@ -122,6 +127,7 @@ export function createFullBalanceReportCheckpointRepository(db: AppDatabase) {
               });
             }
           }
+          if (values.length === 0) continue;
           const created = await tx.insert(fullBalanceReportEntries).values(values).returning({
             id: fullBalanceReportEntries.id, rowIndex: fullBalanceReportEntries.rowIndex,
           });

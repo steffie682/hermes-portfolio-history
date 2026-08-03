@@ -6,9 +6,9 @@ import { countBalanceReportOcrCandidates, type BalanceReportOcrCandidates } from
 export type BalanceReportAccountSummary = { id: string; displayName: string };
 
 export type SavedSnapshotSummary = {
-  id: string; statementDate: string; rowCount?: number; positionCount?: number;
+  id: string; statementDate: string; rowCount?: number; positionCount?: number; unresolvedSectionCount?: number;
 };
-type Mode = '' | 'zero' | 'rows';
+type Mode = '' | 'zero' | 'rows' | 'missing';
 type Draft = Record<string, string>;
 type SectionName = 'deposits' | 'collateral' | 'domesticStockLots' | 'fundBalances' | 'margin';
 
@@ -193,6 +193,10 @@ export default function BalanceReportPositionForm({ accounts, sourcePageCount, i
         <label><input type="radio" name={`${name}-mode`} checked={modes[name] === 'rows'}
           onChange={() => changed(() => { setModes((v) => ({ ...v, [name]: 'rows' })); setRows((v) => ({ ...v, [name]: v[name].length ? v[name] : [empty[name]()] })); })} />
           原本記載の明細を入力する</label>
+        <label><input type="radio" name={`${name}-mode`} checked={modes[name] === 'missing'}
+          onChange={() => changed(() => { setModes((v) => ({ ...v, [name]: 'missing' })); setRows((v) => ({ ...v, [name]: [] })); })} />
+          {titles[name]}は原本に残高あり・今回は明細未入力</label>
+        {modes[name] === 'missing' ? <p className="asset-warning">0件とは扱いません。未解決区分として保存し、資産概要にも未入力と表示します。</p> : null}
         {name === 'domesticStockLots' ? <p>取得明細だけを入力し、括弧付きの銘柄別合計行は二重計上になるため入力しません。</p> : null}
         {name === 'margin' ? <p>区分欄に従い、未決済または決済ずみを明細ごとに選択してください。</p> : null}
         {modes[name] === 'zero' ? <>
@@ -235,7 +239,7 @@ export default function BalanceReportPositionForm({ accounts, sourcePageCount, i
     activeSave.current?.abort(); activeSave.current = controller;
     setSaving(true); setMessage('');
     const sectionPayload = (name: SectionName) => ({
-      evidenceState: modes[name] === 'zero' ? 'explicit_zero' : 'reported',
+      evidenceState: modes[name] === 'zero' ? 'explicit_zero' : modes[name] === 'missing' ? 'missing' : 'reported',
       zeroLocator: modes[name] === 'zero' ? {
         sourcePage: Number(zeroLocators[name].sourcePage),
         sourceRow: Number(zeroLocators[name].sourceRow),
@@ -335,11 +339,13 @@ export default function BalanceReportPositionForm({ accounts, sourcePageCount, i
       })}
       {unsupported ? <p role="alert">先物・オプションの残高ありはこの版では未対応のため保存できません。0として扱いません。</p> : null}
       <label><input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.currentTarget.checked)} />
-        関係する全ページを元の報告書で確認し、0または全明細を入力しました</label>
+        関係する全ページを元の報告書で確認し、未入力区分は未解決として明示しました</label>
       <button type="submit" disabled={!reviewed || unsupported || futures !== 'zero' || options !== 'zero'
-        || Object.values(modes).some((mode) => !mode)}>確認した全残高を保存</button>
+        || Object.values(modes).some((mode) => !mode)}>確認した残高証拠を保存</button>
     </fieldset></form>
     {message ? <p role="status">{message}</p> : null}
-    {saved ? <p>直近の保存：{saved.statementDate}・明細{saved.rowCount ?? 0}件</p> : null}
+    {saved ? <p>直近の保存：{saved.statementDate}・{saved.unresolvedSectionCount
+      ? `明細未入力の区分${saved.unresolvedSectionCount}件`
+      : `明細${saved.rowCount ?? 0}件`}</p> : null}
   </section>;
 }

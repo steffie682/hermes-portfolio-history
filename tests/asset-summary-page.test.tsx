@@ -53,6 +53,22 @@ describe('asset summary page', () => {
       .toBe('/imports/sbi/balance-report');
   });
 
+  it('renders unresolved nonzero evidence as missing rather than zero confirmed', async () => {
+    mocks.resolvePageSessionPrincipal.mockResolvedValue({ authenticated: true });
+    mocks.listLatestEvidence.mockResolvedValue([{
+      checkpointId, brokerAccountId: accountId, accountName: 'Synthetic SBI', statementDate: '2026-06-30',
+      sections: {
+        deposits: 'explicit_zero', collateral: 'explicit_zero', domesticStockLots: 'explicit_zero',
+        fundBalances: 'explicit_zero', margin: 'missing', futures: 'explicit_zero', options: 'explicit_zero',
+      },
+      deposits: [], collateral: [], domesticStockLots: [], fundBalances: [], margin: [],
+    }]);
+    render(await AssetSummaryPage());
+    expect(screen.getByText('信用建玉: 残高あり・明細未入力')).toBeTruthy();
+    expect(screen.getByText(/信用建玉の明細は未入力/)).toBeTruthy();
+    expect(screen.queryByText('信用建玉: 0件確認済み')).toBeNull();
+  });
+
   it('renders section counts and incomplete evidence without inventing a total', async () => {
     const principal = { authenticated: true };
     mocks.resolvePageSessionPrincipal.mockResolvedValue(principal);

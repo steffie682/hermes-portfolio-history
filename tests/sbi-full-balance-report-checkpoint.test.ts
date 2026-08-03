@@ -85,6 +85,24 @@ describe('confirmed full SBI balance-report checkpoint', () => {
     expect(validateFullBalanceReportCheckpoint(validCheckpoint)).toEqual(validCheckpoint);
   });
 
+  it('accepts a reviewed section as explicitly unresolved without pretending it is zero', () => {
+    const input = structuredClone(validCheckpoint) as any;
+    input.margin = { evidenceState: 'missing', zeroLocator: null, rows: [] };
+    expect(validateFullBalanceReportCheckpoint(input).margin).toEqual(input.margin);
+  });
+
+  it.each([
+    ['rows', [{ synthetic: true }]],
+    ['zero locator', { sourcePage: 5, sourceRow: 1 }],
+  ])('rejects missing evidence with %s', (kind, value) => {
+    const input = structuredClone(validCheckpoint) as any;
+    input.margin = { evidenceState: 'missing', zeroLocator: null, rows: [] };
+    if (kind === 'rows') input.margin.rows = value;
+    else input.margin.zeroLocator = value;
+    expect(() => validateFullBalanceReportCheckpoint(input))
+      .toThrow(FullBalanceReportCheckpointValidationError);
+  });
+
   it('fingerprints canonical evidence deterministically and binds it to its owner', () => {
     const checkpoint = validateFullBalanceReportCheckpoint(validCheckpoint);
     expect(fingerprintFullBalanceReportCheckpoint('synthetic-owner-a', checkpoint))

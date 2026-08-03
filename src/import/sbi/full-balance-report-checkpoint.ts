@@ -45,18 +45,18 @@ export type FullBalanceReportCheckpoint = {
   allRelevantPagesReviewed: true;
   evidence: { kind: 'generic_as_of'; confirmation: 'manual' };
   deposits: {
-    evidenceState: 'explicit_zero' | 'reported'; zeroLocator: SourceLocator | null;
+    evidenceState: 'explicit_zero' | 'reported' | 'missing'; zeroLocator: SourceLocator | null;
     rows: Array<SourceLocator & { kind: 'cash_deposit'; amount: string }>;
   };
   collateral: {
-    evidenceState: 'explicit_zero' | 'reported'; zeroLocator: SourceLocator | null;
+    evidenceState: 'explicit_zero' | 'reported' | 'missing'; zeroLocator: SourceLocator | null;
     rows: Array<SourceLocator & {
       kind: 'margin_guarantee' | 'stock_lending_collateral' | 'futures_options_margin';
       amount: string;
     }>;
   };
   domesticStockLots: {
-    evidenceState: 'explicit_zero' | 'reported'; zeroLocator: SourceLocator | null;
+    evidenceState: 'explicit_zero' | 'reported' | 'missing'; zeroLocator: SourceLocator | null;
     rows: Array<SourceLocator & {
       securityCode: string;
       securityName: string;
@@ -72,7 +72,7 @@ export type FullBalanceReportCheckpoint = {
     }>;
   };
   fundBalances: {
-    evidenceState: 'explicit_zero' | 'reported'; zeroLocator: SourceLocator | null;
+    evidenceState: 'explicit_zero' | 'reported' | 'missing'; zeroLocator: SourceLocator | null;
     rows: Array<SourceLocator & {
       securityCode: string;
       securityName: string;
@@ -83,7 +83,7 @@ export type FullBalanceReportCheckpoint = {
     }>;
   };
   margin: {
-    evidenceState: 'explicit_zero' | 'reported'; zeroLocator: SourceLocator | null;
+    evidenceState: 'explicit_zero' | 'reported' | 'missing'; zeroLocator: SourceLocator | null;
     rows: Array<SourceLocator & {
       state: 'open' | 'settled';
       securityCode: string;
@@ -282,9 +282,11 @@ export function validateFullBalanceReportCheckpoint(
       || section.rows.length > 100
     ) invalid();
     const zero = section.evidenceState === 'explicit_zero';
+    const missing = section.evidenceState === 'missing';
     if (
       (zero && (section.rows.length !== 0 || !record(section.zeroLocator)))
-      || (!zero && (section.evidenceState !== 'reported' || section.rows.length === 0
+      || (missing && (section.rows.length !== 0 || section.zeroLocator !== null))
+      || (!zero && !missing && (section.evidenceState !== 'reported' || section.rows.length === 0
         || section.zeroLocator !== null))
       || ((name === 'futures' || name === 'options') && !zero)
     ) invalid();

@@ -77,6 +77,20 @@ function confirmAllSectionsAsZero() {
 afterEach(() => cleanup());
 
 describe('SBI balance report client', () => {
+  it('labels recent unresolved evidence without presenting it as zero rows', () => {
+    render(<SbiBalanceReportClient
+      accounts={[{ id: '11111111-1111-4111-8111-111111111111', displayName: '合成SBI口座' }]}
+      recentSnapshots={[{
+        id: '22222222-2222-4222-8222-222222222222', statementDate: '2026-06-15',
+        rowCount: 0, unresolvedSectionCount: 1,
+      }]}
+      inspectPdf={vi.fn().mockResolvedValue(safeReport)}
+    />);
+    expect(screen.getByText('2026-06-15・明細未入力の区分1件')).toBeTruthy();
+    expect(screen.queryByText('2026-06-15・明細0件')).toBeNull();
+  });
+
+
   it('uses a plain SBI import return label when opened without a saved batch', () => {
     render(<SbiBalanceReportClient />);
     expect(screen.getByRole('link', { name: 'SBI CSV取込へ戻る' }).getAttribute('href')).toBe('/imports/sbi');
@@ -111,13 +125,13 @@ describe('SBI balance report client', () => {
     })).toBeTruthy();
     expect(screen.getByRole('link', { name: '診断用JSONを保存（任意）' })).toBeTruthy();
     expect(screen.getByText(/このJSONは帳票形式の診断用/)).toBeTruthy();
-    expect((screen.getByRole('button', { name: '確認した全残高を保存' }) as HTMLButtonElement).disabled)
+    expect((screen.getByRole('button', { name: '確認した残高証拠を保存' }) as HTMLButtonElement).disabled)
       .toBe(true);
 
     fireEvent.change(screen.getByLabelText('報告書基準日'), { target: { value: '2026-07-23' } });
     confirmAllSectionsAsZero();
     fireEvent.click(screen.getByLabelText(/関係する全ページを元の報告書で確認/));
-    fireEvent.click(screen.getByRole('button', { name: '確認した全残高を保存' }));
+    fireEvent.click(screen.getByRole('button', { name: '確認した残高証拠を保存' }));
 
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     expect(fetch.mock.calls[0][0]).toBe('/api/imports/sbi/full-balance-report-checkpoints');
@@ -158,7 +172,7 @@ describe('SBI balance report client', () => {
     choose(pdfFile());
     await screen.findByRole('heading', { name: '取引残高報告書を本人確認して保存' });
 
-    const save = screen.getByRole('button', { name: '確認した全残高を保存' }) as HTMLButtonElement;
+    const save = screen.getByRole('button', { name: '確認した残高証拠を保存' }) as HTMLButtonElement;
     fireEvent.change(screen.getByLabelText('報告書基準日'), { target: { value: '2026-07-23' } });
     fireEvent.click(screen.getAllByLabelText(/0と確認した/)[0]);
     expect(save.disabled).toBe(true);
@@ -195,7 +209,7 @@ describe('SBI balance report client', () => {
     confirmAllSectionsAsZero();
     fireEvent.click(screen.getByLabelText(/関係する全ページを元の報告書で確認/));
 
-    const form = screen.getByRole('button', { name: '確認した全残高を保存' }).closest('form')!;
+    const form = screen.getByRole('button', { name: '確認した残高証拠を保存' }).closest('form')!;
     fireEvent.submit(form);
     fireEvent.submit(form);
     expect(fetch).toHaveBeenCalledOnce();
@@ -243,7 +257,7 @@ describe('SBI balance report client', () => {
     await screen.findByRole('heading', { name: '取引残高報告書を本人確認して保存' });
     confirmAllSectionsAsZero();
     fireEvent.click(screen.getByLabelText(/関係する全ページを元の報告書で確認/));
-    fireEvent.submit(screen.getByRole('button', { name: '確認した全残高を保存' }).closest('form')!);
+    fireEvent.submit(screen.getByRole('button', { name: '確認した残高証拠を保存' }).closest('form')!);
     expect(await screen.findByText('選択したSBI口座を確認できませんでした。')).toBeTruthy();
     expect(document.body.textContent).not.toContain('sensitive detail');
   });
@@ -260,7 +274,7 @@ describe('SBI balance report client', () => {
     await screen.findByRole('heading', { name: '取引残高報告書を本人確認して保存' });
     confirmAllSectionsAsZero();
     fireEvent.click(screen.getByLabelText(/関係する全ページを元の報告書で確認/));
-    fireEvent.submit(screen.getByRole('button', { name: '確認した全残高を保存' }).closest('form')!);
+    fireEvent.submit(screen.getByRole('button', { name: '確認した残高証拠を保存' }).closest('form')!);
     expect(await screen.findByText('現在保存できません。時間をおいてもう一度お試しください。'))
       .toBeTruthy();
     expect(document.body.textContent).not.toContain('sensitive database detail');
@@ -444,7 +458,7 @@ describe('SBI balance report client', () => {
     fireEvent.change(screen.getByLabelText('元PDFのページ'), { target: { value: '2' } });
     fireEvent.change(screen.getByLabelText('ページ内の明細番号（上から）'), { target: { value: '1' } });
     fireEvent.click(screen.getByLabelText(/関係する全ページを元の報告書で確認/));
-    fireEvent.click(screen.getByRole('button', { name: '確認した全残高を保存' }));
+    fireEvent.click(screen.getByRole('button', { name: '確認した残高証拠を保存' }));
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     const savedBody = fetch.mock.calls[0][1].body as string;
     expect(savedBody).toContain('LOCAL-CANDIDATE-CANARY');
@@ -559,7 +573,7 @@ describe('SBI balance report client', () => {
     choose(pdfFile());
     expect((await screen.findByRole('alert')).textContent).toContain('保存できません');
     expect(screen.getByRole('link', { name: '診断用JSONを保存（任意）' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '確認した全残高を保存' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '確認した残高証拠を保存' })).toBeNull();
   });
 
   it('binds an OCR subset checkpoint to the full original PDF page count', async () => {
@@ -600,7 +614,7 @@ describe('SBI balance report client', () => {
       expect(page.max).toBe('10');
     }
     fireEvent.click(screen.getByLabelText(/関係する全ページを元の報告書で確認/));
-    fireEvent.click(screen.getByRole('button', { name: '確認した全残高を保存' }));
+    fireEvent.click(screen.getByRole('button', { name: '確認した残高証拠を保存' }));
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     expect(JSON.parse(fetch.mock.calls[0][1].body).sourcePageCount).toBe(10);
     await waitFor(() => expect([...source]).toEqual([0, 0, 0, 0, 0, 0]));
@@ -624,7 +638,7 @@ describe('SBI balance report client', () => {
     await screen.findByRole('heading', { name: '端末内の日本語OCR' });
     fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
     expect((await screen.findByRole('alert')).textContent).toContain('保存できません');
-    expect(screen.queryByRole('button', { name: '確認した全残高を保存' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '確認した残高証拠を保存' })).toBeNull();
   });
 
   it.each([
@@ -647,7 +661,7 @@ describe('SBI balance report client', () => {
     fireEvent.click(screen.getAllByLabelText('原本記載の明細を入力する')[4]);
     const confirmation = screen.getByLabelText(/関係する全ページを元の報告書で確認/) as HTMLInputElement;
     fireEvent.click(confirmation);
-    const save = screen.getByRole('button', { name: '確認した全残高を保存' }) as HTMLButtonElement;
+    const save = screen.getByRole('button', { name: '確認した残高証拠を保存' }) as HTMLButtonElement;
     expect(save.disabled).toBe(false);
     mutate();
     expect(confirmation.checked).toBe(false);
@@ -667,7 +681,7 @@ describe('SBI balance report client', () => {
     fireEvent.click(screen.getByRole('button', { name: '明細を追加' }));
     const confirmation = screen.getByLabelText(/関係する全ページを元の報告書で確認/) as HTMLInputElement;
     fireEvent.click(confirmation);
-    const save = screen.getByRole('button', { name: '確認した全残高を保存' }) as HTMLButtonElement;
+    const save = screen.getByRole('button', { name: '確認した残高証拠を保存' }) as HTMLButtonElement;
     expect(save.disabled).toBe(false);
     fireEvent.click(screen.getAllByRole('button', { name: 'この明細を削除' })[0]);
     expect(confirmation.checked).toBe(false);
@@ -686,7 +700,7 @@ describe('SBI balance report client', () => {
     choose(pdfFile(2));
     const replacement = await screen.findByLabelText(/関係する全ページを元の報告書で確認/) as HTMLInputElement;
     expect(replacement.checked).toBe(false);
-    expect((screen.getByRole('button', { name: '確認した全残高を保存' }) as HTMLButtonElement).disabled)
+    expect((screen.getByRole('button', { name: '確認した残高証拠を保存' }) as HTMLButtonElement).disabled)
       .toBe(true);
   });
 
@@ -707,7 +721,7 @@ describe('SBI balance report client', () => {
     fireEvent.change(screen.getByLabelText('報告書基準日'), { target: { value: '2026-07-23' } });
     confirmAllSectionsAsZero();
     fireEvent.click(screen.getByLabelText(/関係する全ページを元の報告書で確認/));
-    fireEvent.click(screen.getByRole('button', { name: '確認した全残高を保存' }));
+    fireEvent.click(screen.getByRole('button', { name: '確認した残高証拠を保存' }));
     expect(await screen.findByText('確認した残高を保存しました。')).toBeTruthy();
     expect(screen.getByText(/直近の保存：2026-07-23/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText('報告書基準日'), { target: { value: '2026-07-22' } });

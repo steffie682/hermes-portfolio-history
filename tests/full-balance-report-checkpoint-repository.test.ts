@@ -102,7 +102,7 @@ describe('full balance report checkpoint repository', () => {
     try {
       const first = await context.repository.save(context.principal, checkpoint);
       const replay = await context.repository.save(context.principal, checkpoint);
-      expect(first).toMatchObject({ created: true, checkpoint: { rowCount: 1 } });
+      expect(first).toMatchObject({ created: true, checkpoint: { rowCount: 1, unresolvedSectionCount: 0 } });
       expect(replay).toMatchObject({ created: false, checkpoint: first.checkpoint });
       const counts = await context.client.query<{ parents: number; cash: number }>(`
         select
@@ -110,6 +110,81 @@ describe('full balance report checkpoint repository', () => {
           (select count(*)::int from full_balance_report_cash_rows) cash
       `);
       expect(counts.rows[0]).toEqual({ parents: 1, cash: 1 });
+    } finally {
+      await context.client.close();
+    }
+  });
+
+  it('persists unresolved margin evidence without zero or row entries and reads it back as missing', async () => {
+    const context = await setup();
+    const unresolved = validateFullBalanceReportCheckpoint({
+      ...checkpoint,
+      margin: { evidenceState: 'missing', zeroLocator: null, rows: [] },
+    });
+    try {
+      const unresolvedSaved = await context.repository.save(context.principal, unresolved);
+      expect(unresolvedSaved.checkpoint).toMatchObject({ rowCount: 1, unresolvedSectionCount: 1 });
+      const sections = await context.client.query<{ evidence_state: string; declared_count: number }>(`
+        select evidence_state, declared_count from full_balance_report_sections where section_kind = 'margin'
+      `);
+      const entries = await context.client.query<{ count: number }>(`
+        select count(*)::int count from full_balance_report_entries where section_kind = 'margin'
+      `);
+      expect(sections.rows).toEqual([{ evidence_state: 'missing', declared_count: 0 }]);
+      expect(entries.rows).toEqual([{ count: 0 }]);
+      const latest = await context.repository.listLatestEvidence(context.principal);
+      expect(latest[0].sections.margin).toBe('missing');
+      expect(latest[0].margin).toEqual([]);
+      for (const [entryKind, rowIndex, sourceRow] of [['zero', 'null', 88], ['row', '1', 89]] as const) {
+        await context.client.exec('begin;');
+        await context.client.exec(`
+          insert into full_balance_report_entries (
+            owner_user_id, broker_account_id, checkpoint_id, section_kind,
+            entry_kind, row_index, source_page, source_row
+          ) values (
+            'synthetic-owner-a', '00000000-0000-4000-8000-000000000001',
+            '${latest[0].checkpointId}', 'margin', '${entryKind}', ${rowIndex}, 1, ${sourceRow}
+          );
+        `);
+        await expect(context.client.exec('set constraints all immediate;')).rejects.toThrow(
+          'incomplete section evidence',
+        );
+        await context.client.exec('rollback;');
+      }
+    } finally {
+      await context.client.close();
+    }
+  });
+
+  it('rejects direct-SQL missing evidence for unsupported futures and options', async () => {
+    const context = await setup();
+    try {
+      const saved = await context.repository.save(context.principal, checkpoint);
+      for (const sectionKind of ['futures', 'options']) {
+        await context.client.exec(`
+          begin;
+          alter table full_balance_report_entries disable trigger user;
+          alter table full_balance_report_sections disable trigger user;
+          delete from full_balance_report_entries
+           where checkpoint_id = '${saved.checkpoint.id}' and section_kind = '${sectionKind}';
+          delete from full_balance_report_sections
+           where checkpoint_id = '${saved.checkpoint.id}' and section_kind = '${sectionKind}';
+          alter table full_balance_report_entries enable trigger user;
+          alter table full_balance_report_sections enable trigger user;
+        `);
+        await expect(context.client.exec(`
+          insert into full_balance_report_sections (
+            owner_user_id, broker_account_id, checkpoint_id, section_kind, evidence_state, declared_count
+          ) values (
+            'synthetic-owner-a', '00000000-0000-4000-8000-000000000001',
+            '${saved.checkpoint.id}', '${sectionKind}', 'missing', 0
+          );
+        `)).rejects.toMatchObject({
+          code: '23514',
+          constraint: 'full_balance_report_sections_state_check',
+        });
+        await context.client.exec('rollback;');
+      }
     } finally {
       await context.client.close();
     }
@@ -323,7 +398,7 @@ describe('full balance report checkpoint repository', () => {
       await context.repository.save(context.principal, checkpoint);
       const recent = await context.repository.listRecent(context.principal);
       expect(recent).toEqual([expect.objectContaining({
-        statementDate: '2026-06-15', rowCount: 1,
+        statementDate: '2026-06-15', rowCount: 1, unresolvedSectionCount: 0,
       })]);
       expect(recent[0]).not.toHaveProperty('brokerAccountId');
       expect(recent[0]).not.toHaveProperty('ownerUserId');

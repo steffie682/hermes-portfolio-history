@@ -13,7 +13,7 @@ export const MAX_FULL_BALANCE_REPORT_CHECKPOINT_BYTES = 256 * 1024;
 class PayloadTooLargeError extends Error {}
 type SaveResult = {
   created: boolean;
-  checkpoint: { id: string; statementDate: string; rowCount: number };
+  checkpoint: { id: string; statementDate: string; rowCount: number; unresolvedSectionCount: number };
 };
 type Repository = {
   save(
