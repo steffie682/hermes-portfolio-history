@@ -311,7 +311,9 @@ describe('SBI browser OCR resources', () => {
       dependencies,
     );
 
-    expect(report.pages[0].extractionMode).toBe('ocr');
+    expect(report.report.pages[0].extractionMode).toBe('ocr');
+    expect(report.candidates).toEqual({ deposits: [], collateral: [], domesticStockLots: [], fundBalances: [], margin: [], limitReached: false });
+    expect(recognize).toHaveBeenCalledWith(canvas, {}, { text: true, blocks: true });
     expect(createWorker).toHaveBeenCalledWith('jpn', 1, {
       workerPath: `${location.origin}/ocr/worker.min.js`,
       corePath: `${location.origin}/ocr/core`,
@@ -430,7 +432,7 @@ describe('SBI browser OCR resources', () => {
 
   it('clears raw OCR text when recognition resolves after abort', async () => {
     const controller = new AbortController();
-    const lateResult = { data: { text: '取引残高報告書 LATE-OCR-TEXT' } };
+    const lateResult = { data: { text: '取引残高報告書 LATE-OCR-TEXT', blocks: [{ paragraphs: [] }] } };
     let resolveRecognition!: (result: typeof lateResult) => void;
     const recognitionPromise = new Promise<typeof lateResult>((resolve) => {
       resolveRecognition = resolve;
@@ -479,6 +481,7 @@ describe('SBI browser OCR resources', () => {
     resolveRecognition(lateResult);
 
     await vi.waitFor(() => expect(lateResult.data.text).toBe(''));
+    expect(lateResult.data.blocks).toBeNull();
   });
 
   it('fails closed before worker creation for invalid runtime origins', async () => {
@@ -670,7 +673,7 @@ describe('SBI browser OCR resources', () => {
   });
 
   it('clears the recognizer result even when safe conversion rejects it', async () => {
-    const result = { data: { text: '取引残高報告書\u0000PRIVATE-CANARY' } };
+    const result = { data: { text: '取引残高報告書\u0000PRIVATE-CANARY', blocks: [{ paragraphs: [] }] } };
     const dependencies: BrowserOcrDependencies = {
       loadPdfJs: vi.fn().mockResolvedValue({
         GlobalWorkerOptions: { workerSrc: `${location.origin}/pdf.worker.min.mjs` },
@@ -710,5 +713,6 @@ describe('SBI browser OCR resources', () => {
       dependencies,
     )).rejects.toThrow('ocr-text-forbidden-character');
     expect(result.data.text).toBe('');
+    expect(result.data.blocks).toBeNull();
   });
 });

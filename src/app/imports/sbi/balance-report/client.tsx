@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import Link from 'next/link';
 import { buildSbiBalanceReportSafeReport } from '@/import/sbi/balance-report-safe-report';
-import { runSbiBrowserOcr, validateOcrPageRange } from '@/import/sbi/browser-ocr';
+import { runSbiBrowserOcr, validateOcrPageRange, type SbiBrowserOcrResult } from '@/import/sbi/browser-ocr';
+import { countBalanceReportOcrCandidates, emptyBalanceReportOcrCandidates, mergeBalanceReportOcrCandidates, type BalanceReportOcrCandidates } from '@/import/sbi/balance-report-ocr-candidates';
 import { extractPdfStructure, type PdfDocumentLoader } from '@/import/sbi/pdf-structure-extractor';
 import BalanceReportPositionForm, {
   type BalanceReportAccountSummary,
@@ -63,7 +64,7 @@ export default function SbiBalanceReportClient({
     range: { startPage: number; endPage: number },
     signal: AbortSignal,
     onProgress: (completed: number, total: number) => void,
-  ) => Promise<SafeReport>;
+  ) => Promise<SafeReport | SbiBrowserOcrResult>;
 }) {
   const operationVersion = useRef(0);
   const activeInspection = useRef<AbortController | null>(null);
@@ -71,6 +72,8 @@ export default function SbiBalanceReportClient({
   const [report, setReport] = useState<SafeReport | null>(null);
   const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
   const [reportGeneration, setReportGeneration] = useState(0);
+  const [formReady, setFormReady] = useState(false);
+  const [ocrCandidates, setOcrCandidates] = useState<BalanceReportOcrCandidates>(() => emptyBalanceReportOcrCandidates());
   const [ocrPageCount, setOcrPageCount] = useState<number | null>(null);
   const [startPage, setStartPage] = useState(1);
   const [endPage, setEndPage] = useState(1);
@@ -99,6 +102,8 @@ export default function SbiBalanceReportClient({
     const version = ++operationVersion.current;
     const file = event.currentTarget.files?.[0];
     setReport(null);
+    setFormReady(false);
+    setOcrCandidates(emptyBalanceReportOcrCandidates());
     setPdfPageCount(null);
     setOcrPageCount(null);
     setOcrRunning(false);
@@ -148,6 +153,7 @@ export default function SbiBalanceReportClient({
         setStatus(`自動抽出できませんでした。PDF ${nextReport.pageCount}ページ`);
       } else {
         setReport(nextReport);
+        setFormReady(true);
         setReportGeneration(version);
         setStatus(`PDF ${nextReport.pageCount}ページ`);
         wipeRetainedBytes();
@@ -182,13 +188,13 @@ export default function SbiBalanceReportClient({
     const controller = new AbortController();
     activeInspection.current?.abort();
     activeInspection.current = controller;
-    setReport(null);
+    setFormReady(false);
     setError('');
     setOcrRunning(true);
     setOcrProgress({ completed: 0, total: range.endPage - range.startPage + 1 });
     setStatus('端末内で日本語OCRを準備しています…');
     try {
-      const nextReport = await runOcr(
+      const output = await runOcr(
         ocrBytes,
         range,
         controller.signal,
@@ -199,24 +205,27 @@ export default function SbiBalanceReportClient({
         },
       );
       if (version !== operationVersion.current || controller.signal.aborted) return;
+      const nextReport = 'report' in output ? output.report : output;
+      const nextCandidates = 'report' in output ? output.candidates : emptyBalanceReportOcrCandidates();
       const hasKnownLabel = nextReport.pages.some((page) =>
         page.items.some((item) => item.kind === 'known-label'));
       if (!hasKnownLabel) throw new Error('ocr-known-label-required');
-      setReport(nextReport);
-      setReportGeneration(version);
-      setOcrPageCount(null);
-      setStatus(`OCRが完了しました（${range.endPage - range.startPage + 1}ページ）`);
+      setReport((current) => {
+        if (!current) return nextReport;
+        const byPage = new Map(current.pages.map((page) => [page.pageNumber, page]));
+        for (const page of nextReport.pages) byPage.set(page.pageNumber, page);
+        const pages = [...byPage.values()].sort((a, b) => a.pageNumber - b.pageNumber);
+        return { ...current, pageCount: pages.length, pages };
+      });
+      setOcrCandidates((current) => mergeBalanceReportOcrCandidates(current, nextCandidates));
+      setStatus(`OCRが完了しました（${range.startPage}〜${range.endPage}ページ）。必要なら別の範囲も追加できます。`);
     } catch (ocrError) {
       if (version !== operationVersion.current || controller.signal.aborted) return;
-      setReport(null);
-      setOcrPageCount(null);
       setStatus('');
       setError(ocrError instanceof Error && ocrError.message === 'ocr-known-label-required'
         ? 'OCR結果に既知の見出しがありません。ページ範囲またはPDFを確認してください。'
         : '日本語OCRを完了できませんでした。ページ範囲またはPDFを確認してください。');
     } finally {
-      releaseBytes(ocrBytes);
-      if (retainedPdfBytes.current === ocrBytes) retainedPdfBytes.current = null;
       if (version === operationVersion.current) {
         activeInspection.current = null;
         setOcrRunning(false);
@@ -230,6 +239,8 @@ export default function SbiBalanceReportClient({
     activeInspection.current = null;
     wipeRetainedBytes();
     setReport(null);
+    setFormReady(false);
+    setOcrCandidates(emptyBalanceReportOcrCandidates());
     setPdfPageCount(null);
     setOcrPageCount(null);
     setOcrRunning(false);
@@ -271,7 +282,7 @@ export default function SbiBalanceReportClient({
       ) : null}
       <div className="import-file-panel">
         <label htmlFor="sbi-balance-report-pdf">SBI取引残高報告書PDF</label>
-        <input id="sbi-balance-report-pdf" type="file" accept=".pdf,application/pdf" onChange={handleFileChange} />
+        <input id="sbi-balance-report-pdf" type="file" accept=".pdf,application/pdf" disabled={formReady} onChange={handleFileChange} />
         <strong>PDFは外部へ送信されません</strong>
         <p>このブラウザー内で見出しと表の配置だけを確認し、氏名・口座番号・銘柄・金額はJSONへ残しません。</p>
         <p>処理中の一時的な値は参照を外し、ガベージコレクションの対象として解放します。</p>
@@ -283,7 +294,7 @@ export default function SbiBalanceReportClient({
           <h2 id="sbi-ocr-title">端末内の日本語OCR</h2>
           <p>
             テキストを自動抽出できなかったため、指定ページを画像として端末内で読み取ります。
-            PDFやOCR結果を外部へ送信せず、最大5ページだけ処理します。
+            PDFやOCR結果を外部へ送信せず、1回につき最大5ページだけ処理します。
           </p>
           <p>OCRには誤認識があります。JSONは既知の見出し・分類・粗い配置・件数だけを含み、取引値の証拠にはなりません。</p>
           <label htmlFor="sbi-ocr-start-page">開始ページ</label>
@@ -294,7 +305,7 @@ export default function SbiBalanceReportClient({
             max={ocrPageCount}
             step="1"
             value={startPage}
-            disabled={ocrRunning}
+            disabled={ocrRunning || formReady}
             onChange={(event) => setStartPage(Number(event.currentTarget.value))}
           />
           <label htmlFor="sbi-ocr-end-page">終了ページ</label>
@@ -305,13 +316,13 @@ export default function SbiBalanceReportClient({
             max={ocrPageCount}
             step="1"
             value={endPage}
-            disabled={ocrRunning}
+            disabled={ocrRunning || formReady}
             onChange={(event) => setEndPage(Number(event.currentTarget.value))}
           />
-          <button type="button" disabled={ocrRunning} onClick={() => void handleStartOcr()}>
+          <button type="button" disabled={ocrRunning || formReady} onClick={() => void handleStartOcr()}>
             日本語OCRを開始
           </button>
-          <button type="button" onClick={handleCancelOcr}>OCRをキャンセル</button>
+          <button type="button" disabled={formReady} onClick={handleCancelOcr}>OCRをキャンセル</button>
           {ocrProgress.total > 0 ? (
             <progress
               aria-label="日本語OCRの進捗"
@@ -319,14 +330,24 @@ export default function SbiBalanceReportClient({
               max={ocrProgress.total}
             />
           ) : null}
+          {report ? <>
+            <p>端末内OCRの入力候補：{countBalanceReportOcrCandidates(ocrCandidates)}件</p>
+            <p>追加ページも読む場合は、先にOCRをすべて終えてください。候補反映後は、確認中の入力を守るためPDF変更と追加OCRをロックします。</p>
+            {ocrCandidates.limitReached ? <p role="alert">候補上限に達しました。上限を超えた行は自動反映せず、原本で確認してください。</p> : null}
+            <button type="button" disabled={ocrRunning || formReady} onClick={() => {
+              setReportGeneration((value) => value + 1); setFormReady(true);
+            }}>{formReady ? '候補反映済み' : '候補をフォームに反映'}</button>
+          </> : null}
         </section>
       ) : null}
       {report ? (
         <>
-        {accounts.length > 0 && isBalanceReport && pdfPageCount !== null
+        {accounts.length > 0 && isBalanceReport && pdfPageCount !== null && formReady
           ? <BalanceReportPositionForm key={reportGeneration} accounts={accounts}
-              sourcePageCount={pdfPageCount} />
-          : accounts.length > 0 ? (
+              sourcePageCount={pdfPageCount} initialCandidates={ocrCandidates} onSaved={() => {
+                wipeRetainedBytes(); setOcrPageCount(null);
+              }} />
+          : accounts.length > 0 && !isBalanceReport ? (
             <div className="import-error" role="alert">
               取引残高報告書を確認できないため、このPDFからチェックポイントを保存できません。
             </div>

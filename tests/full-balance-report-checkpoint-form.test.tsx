@@ -26,7 +26,8 @@ describe('full balance report checkpoint form', () => {
       checkpoint: { id: '22222222-2222-4222-8222-222222222222', statementDate: '2026-06-15', rowCount: 0 },
     }), { status: 201, headers: { 'content-type': 'application/json' } }));
     vi.stubGlobal('fetch', fetch);
-    render(<BalanceReportPositionForm sourcePageCount={7} accounts={[{
+    const onSaved = vi.fn();
+    render(<BalanceReportPositionForm sourcePageCount={7} onSaved={onSaved} accounts={[{
       id: '11111111-1111-4111-8111-111111111111', displayName: 'Synthetic SBI',
     }]} />);
     fireEvent.change(screen.getByLabelText('報告書基準日'), { target: { value: '2026-06-15' } });
@@ -49,13 +50,21 @@ describe('full balance report checkpoint form', () => {
       options: { evidenceState: 'explicit_zero', zeroLocator: { sourcePage: 1, sourceRow: 7 }, rows: [] },
     });
     expect(JSON.stringify(body)).not.toMatch(/pdf|ocr|filename|report|safeReport/i);
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+  });
+
+  it('does not claim candidates were inserted when every candidate array is empty', () => {
+    render(<BalanceReportPositionForm sourcePageCount={7} accounts={accounts} initialCandidates={{
+      deposits: [], collateral: [], domesticStockLots: [], fundBalances: [], margin: [], limitReached: true,
+    }} />);
+    expect(screen.queryByText(/国内株・投信だけを候補入力しました/)).toBeNull();
   });
 
   it('states the exact privacy boundary and constrains every source page to the inspected report', () => {
     render(<BalanceReportPositionForm sourcePageCount={7} accounts={accounts} />);
     expect(screen.getByText(/PDFの生バイト、ファイル名、OCR出力、診断用の構造データはサーバーへ送信しません/))
       .toBeTruthy();
-    expect(screen.getByText(/フォームへ手作業で転記した値はサーバーへ送信され、保存されます/))
+    expect(screen.getByText(/フォームへ入力またはOCR候補から反映し、本人が原本確認した値はサーバーへ送信され、保存されます/))
       .toBeTruthy();
     for (const radio of screen.getAllByLabelText(/0と確認した/)) fireEvent.click(radio);
     for (const page of screen.getAllByLabelText(/ページ$/) as HTMLInputElement[]) {
