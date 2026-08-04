@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  formatProductionMigrationError, ProductionMigrationError, runLockedMigration,
+  createSameSessionTransactionClient, formatProductionMigrationError,
+  ProductionMigrationError, runLockedMigration,
 } from '../scripts/migrate-production-locked.mjs';
 
 function harness() {
@@ -60,6 +61,47 @@ describe('serialized production migration runner', () => {
       .rejects.toMatchObject({ message: 'Production migration failed.', stage: 'configuration', sqlState: 'unknown' });
   });
 
+  it('runs begin, callback work, and commit on one reserved session', async () => {
+    const queries: string[] = [];
+    const session = { unsafe: vi.fn(async (query: string) => { queries.push(query); }) };
+    const client = createSameSessionTransactionClient(session);
+    const result = await client.begin(async (transactionClient) => {
+      expect(transactionClient).toBe(client);
+      await (transactionClient as typeof client).unsafe('synthetic work');
+      return 'done';
+    });
+    expect(result).toBe('done');
+    expect(queries).toEqual(['begin', 'synthetic work', 'commit']);
+  });
+
+  it('rolls back and preserves a callback failure even when rollback also fails', async () => {
+    const primary = new Error('synthetic callback failure');
+    const queries: string[] = [];
+    const session = {
+      unsafe: vi.fn(async (query: string) => {
+        queries.push(query);
+        if (query === 'rollback') throw new Error('synthetic rollback failure');
+      }),
+    };
+    const client = createSameSessionTransactionClient(session);
+    await expect(client.begin(async () => { throw primary; })).rejects.toBe(primary);
+    expect(queries).toEqual(['begin', 'rollback']);
+  });
+
+  it('attempts rollback and preserves a commit failure', async () => {
+    const commitFailure = new Error('synthetic commit failure');
+    const queries: string[] = [];
+    const session = {
+      unsafe: vi.fn(async (query: string) => {
+        queries.push(query);
+        if (query === 'commit') throw commitFailure;
+      }),
+    };
+    const client = createSameSessionTransactionClient(session);
+    await expect(client.begin(async () => 'done')).rejects.toBe(commitFailure);
+    expect(queries).toEqual(['begin', 'commit', 'rollback']);
+  });
+
   it('reserves one session and holds its advisory lock across journal and DDL work', async () => {
     const h = harness();
     const applyMigrations = vi.fn(async () => { h.events.push('migrate'); });
@@ -68,7 +110,7 @@ describe('serialized production migration runner', () => {
       createPool: h.createPool, applyMigrations,
     });
     expect(h.events).toEqual(['reserve', 'lock', 'migrate', 'unlock', 'release', 'end']);
-    expect(applyMigrations).toHaveBeenCalledWith(h.session, expect.stringMatching(/drizzle$/));
+    expect(applyMigrations).toHaveBeenCalledWith(h.session, expect.stringMatching(/drizzle$/), h.pool);
   });
 
   it('unlocks, releases, and closes the same session when migration fails', async () => {
