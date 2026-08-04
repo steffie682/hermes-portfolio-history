@@ -1,7 +1,7 @@
 import { lstat, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import postgres from 'postgres';
-import { drizzle } from 'drizzle-orm/postgres-js';
+import { drizzle, PostgresJsDatabase, PostgresJsSession } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { pathToFileURL } from 'node:url';
 
@@ -142,11 +142,49 @@ export function formatProductionMigrationError(error) {
   return `Production migration failed (stage=${stage}, sqlstate=${sqlState}, reason=${reason}).`;
 }
 
+export function createSameSessionTransactionClient(session) {
+  const client = {
+    unsafe: session.unsafe.bind(session),
+    async begin(callback) {
+      await client.unsafe('begin');
+      try {
+        const result = await callback(client);
+        await client.unsafe('commit');
+        return result;
+      } catch (error) {
+        try {
+          await client.unsafe('rollback');
+        } catch {
+          // Preserve the callback or commit failure; cleanup failure must not replace it.
+        }
+        throw error;
+      }
+    },
+  };
+  return client;
+}
+
+function createReservedSessionDatabase(pool, session) {
+  // Drizzle initializes postgres.js codecs through the pool, while all migration
+  // statements and transaction control remain pinned to the reserved session.
+  const poolDatabase = drizzle({ client: pool });
+  const client = createSameSessionTransactionClient(session);
+  const relations = {};
+  return new PostgresJsDatabase(
+    poolDatabase.dialect,
+    new PostgresJsSession(client, poolDatabase.dialect, relations, {}),
+    relations,
+  );
+}
+
 export async function runLockedMigration({
   url,
   migrationsFolder,
   createPool = (connectionUrl) => postgres(connectionUrl, { max: 1 }),
-  applyMigrations = (session, folder) => migrate(drizzle(session), { migrationsFolder: folder }),
+  applyMigrations = (session, folder, poolClient) => migrate(
+    createReservedSessionDatabase(poolClient, session),
+    { migrationsFolder: folder },
+  ),
 }) {
   if (!url) throw new ProductionMigrationError('configuration');
   let folder;
@@ -177,7 +215,7 @@ export async function runLockedMigration({
       throw tagged('lock', error);
     }
     try {
-      await applyMigrations(session, folder);
+      await applyMigrations(session, folder, pool);
     } catch (error) {
       throw tagged('migration', error);
     }
