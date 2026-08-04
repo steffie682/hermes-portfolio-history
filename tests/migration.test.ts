@@ -108,9 +108,11 @@ describe('initial migration', () => {
   });
 
   it('adds the forward-only normalized full checkpoint with narrow append-only access', () => {
-    const latestDirectory = readdirSync('drizzle', { withFileTypes: true })
-      .filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort().at(-1);
-    const sql = readFileSync(`drizzle/${latestDirectory}/migration.sql`, 'utf8');
+    const checkpointDirectory = readdirSync('drizzle', { withFileTypes: true })
+      .filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()
+      .find((directory) => readFileSync(`drizzle/${directory}/migration.sql`, 'utf8')
+        .includes('CREATE TABLE "full_balance_report_checkpoints"'));
+    const sql = readFileSync(`drizzle/${checkpointDirectory}/migration.sql`, 'utf8');
     const tables = [
       'full_balance_report_checkpoints', 'full_balance_report_sections',
       'full_balance_report_entries', 'full_balance_report_cash_rows',
@@ -157,6 +159,24 @@ describe('initial migration', () => {
     expect(sql).toContain('REVOKE ALL ON FUNCTION public.full_balance_report_reject_mutation() FROM PUBLIC');
     expect(sql).toContain('REVOKE ALL ON FUNCTION public.full_balance_report_validate_checkpoint() FROM PUBLIC');
     expect(sql).toContain('CREATE CONSTRAINT TRIGGER full_balance_report_checkpoint_complete');
+  });
+
+  it('adds unresolved nonzero evidence without weakening explicit-zero or reported counts', () => {
+    const migrationDirectory = readdirSync('drizzle', { withFileTypes: true })
+      .filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()
+      .find((directory) => readFileSync(`drizzle/${directory}/migration.sql`, 'utf8')
+        .includes(`"evidence_state" = 'missing'`));
+    const sql = readFileSync(`drizzle/${migrationDirectory}/migration.sql`, 'utf8');
+    expect(sql).toContain('DROP CONSTRAINT "full_balance_report_sections_state_check"');
+    expect(sql).toContain(`("evidence_state" = 'missing' AND "declared_count" = 0 AND "section_kind" NOT IN ('futures','options'))`);
+    expect(sql).toContain(`("evidence_state" = 'explicit_zero' AND "declared_count" = 0)`);
+    expect(sql).toContain(`("evidence_state" = 'reported' AND "declared_count" BETWEEN 1 AND 100)`);
+    expect(sql).toContain('CREATE OR REPLACE FUNCTION public.full_balance_report_validate_checkpoint()');
+    expect(sql).toContain(`s.evidence_state = 'missing' AND EXISTS (`);
+    expect(sql).toContain('e.checkpoint_id = checkpoint AND e.section_kind = s.section_kind');
+    expect(sql).toContain('ADD COLUMN "unresolved_section_count" integer DEFAULT 0 NOT NULL');
+    expect(sql).toContain('parent.unresolved_section_count <> (SELECT count(*) FROM full_balance_report_sections');
+    expect(sql).toContain("evidence_state = 'missing'");
   });
 
   it('enforces exact margin state, date, and source-label constraints through direct SQL', async () => {

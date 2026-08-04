@@ -40,7 +40,7 @@ function setup() {
   const repository = {
     save: vi.fn().mockResolvedValue({
       created: true,
-      checkpoint: { id: '22222222-2222-4222-8222-222222222222', statementDate: '2026-06-15', rowCount: 0 },
+      checkpoint: { id: '22222222-2222-4222-8222-222222222222', statementDate: '2026-06-15', rowCount: 0, unresolvedSectionCount: 0 },
     }),
   };
   return {
@@ -57,7 +57,7 @@ describe('full balance report checkpoint API v2', () => {
     const response = await handler.POST(request());
     expect(response.status).toBe(201);
     expect(await response.json()).toEqual({ checkpoint: {
-      id: '22222222-2222-4222-8222-222222222222', statementDate: '2026-06-15', rowCount: 0,
+      id: '22222222-2222-4222-8222-222222222222', statementDate: '2026-06-15', rowCount: 0, unresolvedSectionCount: 0,
     } });
     expect(repository.save.mock.calls[0][1]).toEqual(payload);
   });

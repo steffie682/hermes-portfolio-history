@@ -389,6 +389,7 @@ export const fullBalanceReportCheckpoints = pgTable.withRLS(
     domesticStockLotCount: integer('domestic_stock_lot_count').notNull(),
     fundBalanceCount: integer('fund_balance_count').notNull(),
     marginCount: integer('margin_count').notNull(),
+    unresolvedSectionCount: integer('unresolved_section_count').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
@@ -411,7 +412,8 @@ export const fullBalanceReportCheckpoints = pgTable.withRLS(
       ${table.collateralCount} BETWEEN 0 AND 100 AND
       ${table.domesticStockLotCount} BETWEEN 0 AND 100 AND
       ${table.fundBalanceCount} BETWEEN 0 AND 100 AND
-      ${table.marginCount} BETWEEN 0 AND 100`),
+      ${table.marginCount} BETWEEN 0 AND 100 AND
+      ${table.unresolvedSectionCount} BETWEEN 0 AND 5`),
     check('full_balance_report_checkpoints_source_page_count_check',
       sql`${table.sourcePageCount} BETWEEN 1 AND 100`),
     pgPolicy('full_balance_report_checkpoints_owner_select', {
@@ -448,6 +450,7 @@ export const fullBalanceReportSections = pgTable.withRLS(
       ('deposits','collateral','domesticStockLots','fundBalances','margin','futures','options')`),
     check('full_balance_report_sections_state_check', sql`
       (${table.evidenceState} = 'explicit_zero' AND ${table.declaredCount} = 0) OR
+      (${table.evidenceState} = 'missing' AND ${table.declaredCount} = 0 AND ${table.sectionKind} NOT IN ('futures','options')) OR
       (${table.evidenceState} = 'reported' AND ${table.declaredCount} BETWEEN 1 AND 100)`),
     pgPolicy('full_balance_report_sections_owner_select', { for: 'select', to: 'public',
       using: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')` }),

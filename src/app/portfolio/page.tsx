@@ -40,6 +40,10 @@ function AccountEvidence({ evidence, accountName, headingId }: {
     ['futures', '先物', 0],
     ['options', 'オプション', 0],
   ] as const;
+  const sectionCount = (kind: keyof AssetEvidence['sections'], label: string, rowCount: number | null) =>
+    evidence.sections[kind] === 'missing'
+      ? `${label} 明細未入力`
+      : `${label} ${rowCount ?? '利用不可'}件`;
   return (
     <section className="asset-account" aria-labelledby={headingId}>
       <header className="asset-account-header">
@@ -51,18 +55,20 @@ function AccountEvidence({ evidence, accountName, headingId }: {
       </header>
 
       <div className="asset-section-totals" aria-label="報告書の区分別記載件数">
-        <p><span>預り金</span><strong>預り金 {summary.deposits.rowCount}件</strong></p>
-        <p><span>担保・保証金</span><strong>担保・保証金 {summary.collateral.rowCount}件</strong></p>
-        <p><span>国内株式</span><strong>国内株式 {summary.stocks.rowCount}件</strong></p>
-        <p><span>投資信託</span><strong>投資信託 {summary.funds.rowCount}件</strong></p>
-        <p><span>信用建玉</span><strong>信用建玉 {summary.margin.rowCount}件</strong></p>
+        <p><span>預り金</span><strong>{sectionCount('deposits', '預り金', summary.deposits.rowCount)}</strong></p>
+        <p><span>担保・保証金</span><strong>{sectionCount('collateral', '担保・保証金', summary.collateral.rowCount)}</strong></p>
+        <p><span>国内株式</span><strong>{sectionCount('domesticStockLots', '国内株式', summary.stocks.rowCount)}</strong></p>
+        <p><span>投資信託</span><strong>{sectionCount('fundBalances', '投資信託', summary.funds.rowCount)}</strong></p>
+        <p><span>信用建玉</span><strong>{sectionCount('margin', '信用建玉', summary.margin.rowCount)}</strong></p>
       </div>
       <ul className="section-state-list" aria-label="7区分の確認状態">
         {sectionStatuses.map(([kind, label, rowCount]) => (
           <li key={kind}>
             {label}: {evidence.sections[kind] === 'explicit_zero'
               ? '0件確認済み'
-              : `${rowCount}件記載あり`}
+              : evidence.sections[kind] === 'missing'
+                ? '残高あり・明細未入力'
+                : `${rowCount ?? '利用不可'}件記載あり`}
           </li>
         ))}
       </ul>
@@ -93,7 +99,9 @@ function AccountEvidence({ evidence, accountName, headingId }: {
               </tr>
             ))}
             {evidence.deposits.length + evidence.collateral.length === 0 ? (
-              <tr><td colSpan={3}>報告書では0件として確認済みです。</td></tr>
+              <tr><td colSpan={3}>{evidence.sections.deposits === 'missing' || evidence.sections.collateral === 'missing'
+                ? '預り金・担保に明細未入力の区分があります。0件とは扱いません。'
+                : '報告書では0件として確認済みです。'}</td></tr>
             ) : null}
           </tbody>
         </table>
@@ -121,7 +129,9 @@ function AccountEvidence({ evidence, accountName, headingId }: {
               </tr>
             ))}
             {evidence.domesticStockLots.length + evidence.fundBalances.length === 0 ? (
-              <tr><td colSpan={5}>報告書では0件として確認済みです。</td></tr>
+              <tr><td colSpan={5}>{evidence.sections.domesticStockLots === 'missing' || evidence.sections.fundBalances === 'missing'
+                ? '国内株式・投資信託に明細未入力の区分があります。0件とは扱いません。'
+                : '報告書では0件として確認済みです。'}</td></tr>
             ) : null}
           </tbody>
         </table>
@@ -142,7 +152,7 @@ function AccountEvidence({ evidence, accountName, headingId }: {
                 <td><SourceLocator page={row.sourcePage} row={row.sourceRow} /></td>
               </tr>
             ))}
-            {evidence.margin.length === 0 ? <tr><td colSpan={6}>報告書では0件として確認済みです。</td></tr> : null}
+            {evidence.margin.length === 0 ? <tr><td colSpan={6}>{evidence.sections.margin === 'missing' ? '信用建玉の明細は未入力です。残高0とは扱いません。' : '報告書では0件として確認済みです。'}</td></tr> : null}
           </tbody>
         </table>
       </div>

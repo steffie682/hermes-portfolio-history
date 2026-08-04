@@ -34,22 +34,53 @@ const evidence: AssetEvidence = {
 describe('asset evidence summary', () => {
   it('reports counts without adding source amounts or inventing a currency', () => {
     const summary = summarizeAssetEvidence(evidence);
-    expect(summary.deposits).toEqual({ rowCount: 2 });
-    expect(summary.collateral).toEqual({ rowCount: 1 });
-    expect(summary.funds).toEqual({ rowCount: 1, evaluationReportedCount: 1 });
+    expect(summary.deposits).toEqual({ evidenceState: 'reported', rowCount: 2 });
+    expect(summary.collateral).toEqual({ evidenceState: 'reported', rowCount: 1 });
+    expect(summary.funds).toEqual({ evidenceState: 'reported', rowCount: 1, evaluationReportedCount: 1 });
     expect(summary).not.toHaveProperty('totalAssets');
     expect(JSON.stringify(summary)).not.toMatch(/reportedTotal|evaluationTotal|300\.30|12345\.67/);
   });
 
   it('fails closed when even one stock evaluation amount is absent', () => {
     expect(summarizeAssetEvidence(evidence).stocks).toEqual({
+      evidenceState: 'reported',
       rowCount: 2,
       evaluation: { state: 'incomplete', reportedCount: 1, missingCount: 1 },
     });
   });
 
+  it('makes unresolved section counts and coverage unavailable rather than zero or complete', () => {
+    const unresolved = summarizeAssetEvidence({
+      ...evidence,
+      sections: {
+        ...evidence.sections, deposits: 'missing', collateral: 'missing',
+        domesticStockLots: 'missing', fundBalances: 'missing', margin: 'missing',
+      },
+      deposits: [], collateral: [], domesticStockLots: [], fundBalances: [], margin: [],
+    });
+    expect(unresolved.deposits).toEqual({ evidenceState: 'missing', rowCount: null });
+    expect(unresolved.collateral).toEqual({ evidenceState: 'missing', rowCount: null });
+    expect(unresolved.funds).toEqual({
+      evidenceState: 'missing', rowCount: null, evaluationReportedCount: null,
+    });
+    expect(unresolved.stocks).toEqual({
+      evidenceState: 'missing',
+      rowCount: null,
+      evaluation: { state: 'unavailable', reason: 'section_missing' },
+    });
+    expect(unresolved.margin).toEqual({
+      evidenceState: 'missing',
+      rowCount: null,
+      openCount: null,
+      settledCount: null,
+      openUnrealizedPnl: { state: 'unavailable', reason: 'section_missing' },
+    });
+    expect(JSON.stringify(unresolved)).not.toMatch(/"rowCount":0.*section_missing|"state":"complete".*section_missing/);
+  });
+
   it('reports margin evidence separately and excludes settled rows from open exposure', () => {
     expect(summarizeAssetEvidence(evidence).margin).toEqual({
+      evidenceState: 'reported',
       rowCount: 3,
       openCount: 2,
       settledCount: 1,

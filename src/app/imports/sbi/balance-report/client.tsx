@@ -274,7 +274,9 @@ export default function SbiBalanceReportClient({
           <ul>
             {recentSnapshots.map((snapshot) => (
               <li key={snapshot.id}>
-                {snapshot.statementDate}・明細{snapshot.rowCount ?? snapshot.positionCount ?? 0}件
+                {snapshot.statementDate}・{snapshot.unresolvedSectionCount
+                  ? `明細未入力の区分${snapshot.unresolvedSectionCount}件`
+                  : `明細${snapshot.rowCount ?? snapshot.positionCount ?? 0}件`}
               </li>
             ))}
           </ul>
