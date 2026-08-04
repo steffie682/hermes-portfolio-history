@@ -222,9 +222,10 @@ export default function SbiBalanceReportClient({
     } catch (ocrError) {
       if (version !== operationVersion.current || controller.signal.aborted) return;
       setStatus('');
+      setOcrProgress({ completed: 0, total: 0 });
       setError(ocrError instanceof Error && ocrError.message === 'ocr-known-label-required'
-        ? 'OCR結果に既知の見出しがありません。ページ範囲またはPDFを確認してください。'
-        : '日本語OCRを完了できませんでした。ページ範囲またはPDFを確認してください。');
+        ? 'OCR結果に既知の見出しがありません。この範囲の結果は追加していません。ページ範囲またはPDFを確認してください。'
+        : '日本語OCRを完了できませんでした。この範囲の結果は追加していません。ページ範囲またはPDFを確認してください。');
     } finally {
       if (version === operationVersion.current) {
         activeInspection.current = null;
