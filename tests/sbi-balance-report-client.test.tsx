@@ -563,13 +563,18 @@ describe('SBI balance report client', () => {
     expect([...second]).toEqual([0, 0, 0, 0, 0, 0]);
   });
 
-  it('shows an error and no download when OCR has no known label', async () => {
-    const runOcr = vi.fn().mockRejectedValue(new Error('ocr-known-label-required'));
-    render(<SbiBalanceReportClient inspectPdf={vi.fn().mockResolvedValue(emptyReport)} runOcr={runOcr} />);
+  it('clears stale progress when an OCR range has no known label', async () => {
+    const runOcr = vi.fn().mockImplementation(async (_bytes, _range, _signal, onProgress) => {
+      onProgress(5, 5);
+      throw new Error('ocr-known-label-required');
+    });
+    render(<SbiBalanceReportClient inspectPdf={vi.fn().mockResolvedValue({ ...emptyReport, pageCount: 10 })} runOcr={runOcr} />);
     choose(pdfFile());
     await screen.findByRole('heading', { name: '端末内の日本語OCR' });
+    fireEvent.change(screen.getByLabelText('終了ページ'), { target: { value: '5' } });
     fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
-    expect((await screen.findByRole('alert')).textContent).toContain('既知の見出し');
+    expect((await screen.findByRole('alert')).textContent).toContain('この範囲の結果は追加していません');
+    expect(screen.queryByRole('progressbar', { name: '日本語OCRの進捗' })).toBeNull();
     expect(screen.queryByRole('link', { name: '診断用JSONを保存（任意）' })).toBeNull();
   });
 
