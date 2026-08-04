@@ -123,7 +123,16 @@ function RowFields({ section, row, sourcePageCount, change }: {
 
 function rowsFromOcrCandidates(initial?: BalanceReportOcrCandidates): Record<SectionName, Draft[]> {
   return {
-    deposits: [], collateral: [], margin: [],
+    deposits: [], collateral: [],
+    margin: initial?.margin.map((row) => ({
+      state: row.state ?? 'open', securityCode: row.securityCode ?? '', securityName: row.securityName ?? '',
+      repaymentTermLabel: row.repaymentTermLabel ?? '', designationLabel: row.designationLabel ?? '',
+      quantity: row.quantity ?? '', market: row.market ?? 'tokyo', side: row.side ?? 'buy',
+      contractDate: row.contractDate ?? '', contractUnitPrice: row.contractUnitPrice ?? '',
+      currentPrice: row.currentPrice ?? '', fees: row.fees ?? '', unrealizedPnl: row.unrealizedPnl ?? '',
+      finalSettlementOrPlannedDate: row.finalSettlementOrPlannedDate ?? '',
+      sourcePage: row.sourcePage ?? '', sourceRow: row.sourceRow ?? '',
+    })) ?? [],
     domesticStockLots: initial?.domesticStockLots.map((row) => ({
       securityCode: row.securityCode ?? '', securityName: row.securityName ?? '',
       acquisitionDate: row.acquisitionDate ?? '', quantity: row.quantity ?? '',
@@ -155,7 +164,7 @@ export default function BalanceReportPositionForm({ accounts, sourcePageCount, i
     collateral: '',
     domesticStockLots: initialCandidates?.domesticStockLots.length ? 'rows' : '',
     fundBalances: initialCandidates?.fundBalances.length ? 'rows' : '',
-    margin: '',
+    margin: initialCandidates?.margin.length ? 'rows' : '',
   }));
   const [rows, setRows] = useState<Record<SectionName, Draft[]>>(() => rowsFromOcrCandidates(initialCandidates));
   const [zeroLocators, setZeroLocators] = useState<Record<SectionName | 'futures' | 'options', Draft>>({
@@ -231,7 +240,7 @@ export default function BalanceReportPositionForm({ accounts, sourcePageCount, i
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (saveInFlight.current || !reviewed || futures !== 'zero' || options !== 'zero'
+    if (saveInFlight.current || candidatesTruncated || !reviewed || futures !== 'zero' || options !== 'zero'
       || Object.values(modes).some((mode) => !mode)) return;
     saveInFlight.current = true;
     const requestGeneration = generation.current;
@@ -305,13 +314,15 @@ export default function BalanceReportPositionForm({ accounts, sourcePageCount, i
   }
 
   const unsupported = futures === 'nonzero' || options === 'nonzero';
+  const candidatesTruncated = initialCandidates?.limitReached === true;
   return <section className="safe-report-result" aria-labelledby="full-checkpoint-title">
     <h2 id="full-checkpoint-title">取引残高報告書を本人確認して保存</h2>
     <p>報告書基準日時点の汎用的な証拠です。開始残高・終了残高とは扱いません。</p>
     <p>PDFの生バイト、ファイル名、OCR出力、診断用の構造データはサーバーへ送信しません。ただし、このフォームへ入力またはOCR候補から反映し、本人が原本確認した値はサーバーへ送信され、保存されます。</p>
     {initialCandidates && countBalanceReportOcrCandidates(initialCandidates) > 0 ? (
-      <p className="asset-warning">端末内OCRで完全に読めた国内株・投信だけを候補入力しました。OCRには誤認識があるため、保存前に全項目を原本と照合し、空欄のページ・行番号は原本から入力してください。</p>
+      <p className="asset-warning">端末内OCRで厳格な構造条件に一致した国内株・投信・信用建玉を、未確認候補として入力しました。OCRには誤認識があるため、保存前に全項目を原本と照合してください。信用建玉の自動入力済みページ番号も原本で確認し、空欄のページ番号とすべての行番号は原本から入力してください。</p>
     ) : null}
+    {candidatesTruncated ? <p role="alert">OCR候補が上限で省略されたため、このフォームは保存できません。OCR結果を消去し、範囲を狭めてやり直してください。</p> : null}
     <p className="asset-warning">0を選べるのは、対象区分が原本にあり、0と明記されている場合だけです。区分自体が原本に載っていない場合は、0として扱わず保存しません。</p>
     <form onSubmit={(event) => void save(event)}><fieldset disabled={saving}>
       <label>SBI口座<select value={brokerAccountId} onChange={(e) => changed(() => setBrokerAccountId(e.currentTarget.value))}>
@@ -340,7 +351,7 @@ export default function BalanceReportPositionForm({ accounts, sourcePageCount, i
       {unsupported ? <p role="alert">先物・オプションの残高ありはこの版では未対応のため保存できません。0として扱いません。</p> : null}
       <label><input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.currentTarget.checked)} />
         関係する全ページを元の報告書で確認し、未入力区分は未解決として明示しました</label>
-      <button type="submit" disabled={!reviewed || unsupported || futures !== 'zero' || options !== 'zero'
+      <button type="submit" disabled={candidatesTruncated || !reviewed || unsupported || futures !== 'zero' || options !== 'zero'
         || Object.values(modes).some((mode) => !mode)}>確認した残高証拠を保存</button>
     </fieldset></form>
     {message ? <p role="status">{message}</p> : null}

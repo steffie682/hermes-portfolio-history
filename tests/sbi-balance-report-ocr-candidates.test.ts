@@ -10,7 +10,7 @@ function line(y: number, entries: Array<[string, number]>) {
   return {
     text: entries.map(([text]) => text).join(' '), confidence: 90,
     bbox: { x0: 0, y0: y, x1: 1_000, y1: y + 15 },
-    words: entries.map(([text, x]) => ({ text, confidence: 90, bbox: { x0: x, y0: y, x1: x + 80, y1: y + 15 } })),
+    words: entries.map(([text, x]) => ({ text, confidence: 90, bbox: { x0: x, y0: y, x1: x + 60, y1: y + 15 } })),
   };
 }
 function page(pageNumber: number, lines: ReturnType<typeof line>[]): OcrCandidatePage {
@@ -103,6 +103,15 @@ describe('SBI balance-report on-device OCR candidates', () => {
     expect(extractBalanceReportOcrCandidates([unrelated, noColumns]).domesticStockLots).toEqual([]);
   });
 
+  it('rejects a domestic security code outside the server grammar', () => {
+    const candidates = extractBalanceReportOcrCandidates([page(4, [
+      line(70, [['国内株式', 100]]),
+      line(90, [['銘柄名', 80], ['数量', 560], ['取得価格', 690], ['買付金額', 860]]),
+      line(120, [['合成株式会社', 80], ['[ABCD]', 280], ['2024/01/15', 420], ['100株', 560], ['1,000円', 690], ['100,000円', 860]]),
+    ])]);
+    expect(candidates.domesticStockLots).toEqual([]);
+  });
+
   it('rejects low-confidence required words, impossible dates, and malformed boxes', () => {
     const low = line(130, [['合成低信頼株', 80], ['[1234]', 280], ['2024/02/20', 420], ['100株', 560], ['1,000円', 690], ['100,000円', 860]]);
     low.words[1].confidence = 0;
@@ -118,8 +127,8 @@ describe('SBI balance-report on-device OCR candidates', () => {
   });
 
   it('keeps distinct identical-looking lots by private row position and deduplicates an overlapping batch', () => {
-    const first = { _localId: '4:domestic:1000:1234', securityCode: '1234', securityName: '合成株', acquisitionDate: '2024-01-15', quantity: '100', acquisitionUnitPrice: '1000' };
-    const second = { ...first, _localId: '4:domestic:2000:1234' };
+    const first = { _localId: '4:domestic:100:1400:1234', securityCode: '1234', securityName: '合成株', acquisitionDate: '2024-01-15', quantity: '100', acquisitionUnitPrice: '1000' };
+    const second = { ...first, _localId: '4:domestic:200:1400:1234' };
     const batchA = emptyBalanceReportOcrCandidates(); batchA.domesticStockLots = [first, second];
     const batchB = emptyBalanceReportOcrCandidates(); batchB.domesticStockLots = [{ ...first }];
     expect(mergeBalanceReportOcrCandidates(batchA, batchB).domesticStockLots).toEqual([first, second]);
@@ -219,12 +228,166 @@ describe('SBI balance-report on-device OCR candidates', () => {
 
   it('reports the candidate cap instead of silently treating a truncated merge as complete', () => {
     const first = emptyBalanceReportOcrCandidates();
-    first.domesticStockLots = Array.from({ length: 100 }, (_, index) => ({ _localId: `4:domestic:${index}:1234`, securityCode: '1234' }));
+    first.domesticStockLots = Array.from({ length: 100 }, (_, index) => ({ _localId: `4:domestic:${100 + index * 50}:10000:1234`, securityCode: '1234' }));
     const next = emptyBalanceReportOcrCandidates();
-    next.domesticStockLots = [{ _localId: '5:domestic:1:5678', securityCode: '5678' }];
+    next.domesticStockLots = [{ _localId: '5:domestic:100:1400:5678', securityCode: '5678' }];
     const merged = mergeBalanceReportOcrCandidates(first, next);
     expect(merged.domesticStockLots).toHaveLength(100);
     expect(merged.limitReached).toBe(true);
+  });
+
+  it('never classifies futures positions as credit margin positions', () => {
+    const candidates = extractBalanceReportOcrCandidates([page(6, [
+      line(70, [['先物建玉残高', 40]]),
+      line(90, [['銘柄名(弁済期限)', 20], ['指定', 260], ['数量・市場', 330], ['区分', 440],
+        ['約定年月日', 520], ['約定単価', 630], ['時価', 720], ['手数料', 790],
+        ['評価損益', 850], ['最終決済期日', 910]]),
+      line(120, [['合成銘柄[1234]6ヶ月', 20], ['-', 260], ['100株東京', 330], ['買未決済', 440],
+        ['2024/01/15', 520], ['1,000円', 630], ['900円', 720], ['-', 790],
+        ['-10,000円', 850], ['2024/07/15', 910]]),
+    ])]);
+    expect(candidates.margin).toEqual([]);
+  });
+
+  it('requires every margin header label in its corresponding proven column', () => {
+    const shiftedHeader = line(90, [['銘柄名(弁済期限)', 20], ['指定', 22], ['数量・市場', 24], ['区分', 26],
+      ['約定年月日', 28], ['約定単価', 30], ['時価', 32], ['手数料', 34], ['評価損益', 36], ['最終決済期日', 38]]);
+    const candidates = extractBalanceReportOcrCandidates([page(6, [
+      line(70, [['信用取引の建玉残高', 40]]), shiftedHeader,
+      line(120, [['合成建設[1234]6ヶ月', 20], ['-', 260], ['100株東京', 330], ['買未決済', 440],
+        ['2024/01/15', 520], ['1,000円', 630], ['900円', 720], ['-', 790],
+        ['-10,000円', 850], ['2024/07/15', 910]]),
+    ])]);
+    expect(candidates.margin).toEqual([]);
+  });
+
+  it('rejects non-exact section markers and geometrically unproven headers', () => {
+    const marginHeader = line(90, [['銘柄名(弁済期限)', 20], ['指定', 260], ['数量・市場', 330], ['区分', 440],
+      ['約定年月日', 520], ['約定単価', 630], ['時価', 720], ['手数料', 790], ['評価損益', 850], ['最終決済期日', 910]]);
+    for (const word of marginHeader.words) word.bbox.x1 = 999;
+    const marginRow = line(120, [['合成建設[1234]6ヶ月', 20], ['-', 260], ['100株東京', 330], ['買未決済', 440],
+      ['2024/01/15', 520], ['1,000円', 630], ['900円', 720], ['-', 790], ['-10,000円', 850], ['2024/07/15', 910]]);
+    const nonExact = extractBalanceReportOcrCandidates([page(6, [line(70, [['非信用取引の建玉残高', 40]]),
+      line(90, [['銘柄名(弁済期限)', 20], ['指定', 260], ['数量・市場', 330], ['区分', 440], ['約定年月日', 520],
+        ['約定単価', 630], ['時価', 720], ['手数料', 790], ['評価損益', 850], ['最終決済期日', 910]]), marginRow])]);
+    const overlapping = extractBalanceReportOcrCandidates([page(6, [line(70, [['信用取引の建玉残高', 40]]), marginHeader, marginRow])]);
+    const shiftedDomestic = extractBalanceReportOcrCandidates([page(4, [line(70, [['国内株式', 100]]),
+      line(90, [['銘柄名', 80], ['数量', 100], ['取得価格', 120], ['買付金額', 140]]),
+      line(120, [['合成株式会社', 80], ['[1234]', 280], ['2024/01/15', 420], ['100株', 560], ['1,000円', 690], ['100,000円', 860]])])]);
+    const shiftedFund = extractBalanceReportOcrCandidates([page(5, [line(70, [['投資信託', 100]]),
+      line(90, [['銘柄名', 80], ['口数', 100], ['参考価格', 120], ['評価額', 140]]),
+      line(120, [['合成ファンド', 80], ['[902.34]', 320], ['40口', 600], ['30,000円', 740], ['2,000円', 890]])])]);
+    expect(nonExact.margin).toEqual([]); expect(overlapping.margin).toEqual([]);
+    expect(shiftedDomestic.domesticStockLots).toEqual([]); expect(shiftedFund.fundBalances).toEqual([]);
+  });
+
+  it('rejects malformed punctuation before canonicalizing financial decimals', () => {
+    const header = line(90, [['銘柄名(弁済期限)', 20], ['指定', 260], ['数量・市場', 330], ['区分', 440],
+      ['約定年月日', 520], ['約定単価', 630], ['時価', 720], ['手数料', 790], ['評価損益', 850], ['最終決済期日', 910]]);
+    const rows = ['1,2,3円', '1(2)3円', '(1,000)円'].map((price, index) => line(120 + index * 25, [
+      [`合成建設[${1234 + index * 2}]6ヶ月`, 20], ['-', 260], ['100株東京', 330], ['買未決済', 440],
+      ['2024/01/15', 520], [price, 630], ['900円', 720], ['-', 790], ['-10,000円', 850], ['2024/07/15', 910],
+    ]));
+    const candidates = extractBalanceReportOcrCandidates([page(6, [line(70, [['信用取引の建玉残高', 40]]), header, ...rows])]);
+    expect(candidates.margin).toEqual([]);
+  });
+
+  it('does not collapse distinct rows just beyond the normalized jitter boundary', () => {
+    const first = { _localId: '6:margin:100000:1000000:1234', securityCode: '1234', securityName: '合成建設' };
+    const second = { ...first, _localId: '6:margin:103004:1000000:1234' };
+    const left = emptyBalanceReportOcrCandidates(); left.margin = [first];
+    const right = emptyBalanceReportOcrCandidates(); right.margin = [second];
+    expect(mergeBalanceReportOcrCandidates(left, right).margin).toEqual([first, second]);
+  });
+
+  it('rejects a server-incompatible margin security code and confidence below 70', () => {
+    const header = line(90, [['銘柄名(弁済期限)', 20], ['指定', 260], ['数量・市場', 330], ['区分', 440],
+      ['約定年月日', 520], ['約定単価', 630], ['時価', 720], ['手数料', 790],
+      ['評価損益', 850], ['最終決済期日', 910]]);
+    const invalidCode = line(120, [['合成建設[ABCD]6ヶ月', 20], ['-', 260], ['100株東京', 330], ['買未決済', 440],
+      ['2024/01/15', 520], ['1,000円', 630], ['900円', 720], ['-', 790], ['-10,000円', 850], ['2024/07/15', 910]]);
+    const lowConfidence = line(150, [['合成建設[1234]6ヶ月', 20], ['-', 260], ['100株東京', 330], ['買未決済', 440],
+      ['2024/01/15', 520], ['1,000円', 630], ['900円', 720], ['-', 790], ['-10,000円', 850], ['2024/07/15', 910]]);
+    lowConfidence.confidence = 65; for (const token of lowConfidence.words) token.confidence = 65;
+    const candidates = extractBalanceReportOcrCandidates([page(6, [line(70, [['信用取引の建玉残高', 40]]), header, invalidCode, lowConfidence])]);
+    expect(candidates.margin).toEqual([]);
+  });
+
+  it('deduplicates the same identical margin row across one-pixel OCR jitter', () => {
+    const candidatePage = (y: number) => page(6, [
+      line(70, [['信用取引の建玉残高', 40]]),
+      line(90, [['銘柄名(弁済期限)', 20], ['指定', 260], ['数量・市場', 330], ['区分', 440],
+        ['約定年月日', 520], ['約定単価', 630], ['時価', 720], ['手数料', 790],
+        ['評価損益', 850], ['最終決済期日', 910]]),
+      line(y, [['合成建設[1234]6ヶ月', 20], ['-', 260], ['100株東京', 330], ['買未決済', 440],
+        ['2024/01/15', 520], ['1,000円', 630], ['900円', 720], ['-', 790],
+        ['-10,000円', 850], ['2024/07/15', 910]]),
+    ]);
+    const first = extractBalanceReportOcrCandidates([candidatePage(120)]);
+    const repeated = extractBalanceReportOcrCandidates([candidatePage(121)]);
+    expect(mergeBalanceReportOcrCandidates(first, repeated).margin).toHaveLength(1);
+  });
+
+  it('extracts a complete self-contained margin row after a trusted margin header', () => {
+    const candidates = extractBalanceReportOcrCandidates([page(6, [
+      line(70, [['信用取引の建玉残高', 40]]),
+      line(90, [['銘柄名(弁済期限)', 20], ['指定', 260], ['数量・市場', 330], ['区分', 440],
+        ['約定年月日', 520], ['約定単価', 630], ['時価', 720], ['手数料', 790],
+        ['評価損益', 850], ['最終決済期日', 910]]),
+      line(120, [['合成建設[1234]6ヶ月', 20], ['-', 260], ['100株東京', 330], ['買未決済', 440],
+        ['2024/01/15', 520], ['1,000.00円', 630], ['900.50円', 720], ['1.00円', 790],
+        ['-10,000.00円', 850], ['2024/07/15', 910]]),
+    ])]);
+    expect(candidates.margin).toEqual([expect.objectContaining({
+      securityCode: '1234', securityName: '合成建設', repaymentTermLabel: '6ヶ月', designationLabel: '',
+      quantity: '100', market: 'tokyo', side: 'buy', state: 'open', contractDate: '2024-01-15',
+      contractUnitPrice: '1000', currentPrice: '900.5', fees: '1', unrealizedPnl: '-10000',
+      finalSettlementOrPlannedDate: '2024-07-15', sourcePage: '6', sourceRow: '',
+    })]);
+  });
+
+  it('keeps 28 distinct physical margin rows even when every financial field is identical', () => {
+    const rows = Array.from({ length: 28 }, (_, index) => line(120 + index * 25, [
+      ['合成建設[1234]6ヶ月', 20], ['-', 260], ['100株東京', 330], ['買未決済', 440],
+      ['2024/01/15', 520], ['1,000円', 630], ['900円', 720], ['-', 790],
+      ['-10,000円', 850], ['2024/07/15', 910],
+    ]));
+    const candidates = extractBalanceReportOcrCandidates([page(6, [
+      line(70, [['信用取引の建玉残高', 40]]),
+      line(90, [['銘柄名(弁済期限)', 20], ['指定', 260], ['数量・市場', 330], ['区分', 440],
+        ['約定年月日', 520], ['約定単価', 630], ['時価', 720], ['手数料', 790],
+        ['評価損益', 850], ['最終決済期日', 910]]),
+      ...rows,
+    ])]);
+    expect(candidates.margin).toHaveLength(28);
+    expect(new Set(candidates.margin.map((row) => row._localId)).size).toBe(28);
+    expect(candidates.limitReached).toBe(false);
+  });
+
+  it('rejects a nonpositive current price before it reaches the editable form', () => {
+    const candidates = extractBalanceReportOcrCandidates([page(6, [
+      line(70, [['信用取引の建玉残高', 40]]),
+      line(90, [['銘柄名(弁済期限)', 20], ['指定', 260], ['数量・市場', 330], ['区分', 440],
+        ['約定年月日', 520], ['約定単価', 630], ['時価', 720], ['手数料', 790],
+        ['評価損益', 850], ['最終決済期日', 910]]),
+      line(120, [['合成建設[1234]6ヶ月', 20], ['-', 260], ['100株東京', 330], ['買未決済', 440],
+        ['2024/01/15', 520], ['1,000円', 630], ['-900円', 720], ['-', 790],
+        ['-10,000円', 850], ['2024/07/15', 910]]),
+    ])]);
+    expect(candidates.margin).toEqual([]);
+  });
+
+  it('rejects an ambiguous margin side instead of choosing the first matching label', () => {
+    const candidates = extractBalanceReportOcrCandidates([page(6, [
+      line(70, [['信用取引の建玉残高', 40]]),
+      line(90, [['銘柄名(弁済期限)', 20], ['指定', 260], ['数量・市場', 330], ['区分', 440],
+        ['約定年月日', 520], ['約定単価', 630], ['時価', 720], ['手数料', 790],
+        ['評価損益', 850], ['最終決済期日', 910]]),
+      line(120, [['合成建設[1234]6ヶ月', 20], ['-', 260], ['100株東京', 330], ['買売未決済', 440],
+        ['2024/01/15', 520], ['1,000円', 630], ['900円', 720], ['-', 790],
+        ['-10,000円', 850], ['2024/07/15', 910]]),
+    ])]);
+    expect(candidates.margin).toEqual([]);
   });
 
   it('drops incomplete or ambiguous rows instead of inventing values', () => {

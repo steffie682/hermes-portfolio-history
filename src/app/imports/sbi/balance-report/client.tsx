@@ -335,8 +335,8 @@ export default function SbiBalanceReportClient({
           {report ? <>
             <p>端末内OCRの入力候補：{countBalanceReportOcrCandidates(ocrCandidates)}件</p>
             <p>追加ページも読む場合は、先にOCRをすべて終えてください。候補反映後は、確認中の入力を守るためPDF変更と追加OCRをロックします。</p>
-            {ocrCandidates.limitReached ? <p role="alert">候補上限に達しました。上限を超えた行は自動反映せず、原本で確認してください。</p> : null}
-            <button type="button" disabled={ocrRunning || formReady} onClick={() => {
+            {ocrCandidates.limitReached ? <p role="alert">候補上限に達したため、この結果はフォームへ反映・保存できません。「OCRをキャンセル」で結果を消去し、PDFを選び直してページ範囲を狭めて再OCRしてください。</p> : null}
+            <button type="button" disabled={ocrRunning || formReady || ocrCandidates.limitReached} onClick={() => {
               setReportGeneration((value) => value + 1); setFormReady(true);
             }}>{formReady ? '候補反映済み' : '候補をフォームに反映'}</button>
           </> : null}

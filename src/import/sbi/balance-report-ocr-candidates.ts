@@ -1,5 +1,5 @@
 const MAX_CANDIDATES_PER_SECTION = 100;
-const MIN_WORD_CONFIDENCE = 30;
+const MIN_WORD_CONFIDENCE = 70;
 const FORBIDDEN = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 type Box = { x0: number; y0: number; x1: number; y1: number };
 export type OcrCandidateWord = { text: string; confidence: number; bbox: Box };
@@ -11,15 +11,19 @@ export type BalanceReportOcrCandidates = {
   domesticStockLots: Record<string, string>[]; fundBalances: Record<string, string>[];
   margin: Record<string, string>[]; limitReached: boolean;
 };
-type CandidateSection = 'domestic' | 'fund';
+type CandidateSection = 'domestic' | 'fund' | 'margin';
 type TrustedLine = { line: OcrCandidateLine; words: OcrCandidateWord[]; text: string; tainted: boolean };
 type SectionLine = TrustedLine & { section: CandidateSection | null; columnsReady: boolean };
 const CANDIDATE_KEYS = ['deposits', 'collateral', 'domesticStockLots', 'fundBalances', 'margin'] as const;
 function ascii(value: string) { return value.normalize('NFKC').replace(/[−―‐]/g, '-'); }
 function compact(value: string) { return ascii(value).replace(/\s+/g, ''); }
 function decimal(value: string): string | null {
-  const cleaned = ascii(value).replace(/[(),，（）円株口]/g, '').trim();
-  if (!/^[+-]?\d+(?:\.\d+)?$/.test(cleaned)) return null;
+  const normalized = compact(value).replace(/，/g, ',');
+  const wrapped = normalized.match(/^\(([+-]?(?:0|[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)(?:\.\d+)?)(?:円|株|口)?\)$/);
+  const plain = normalized.match(/^([+-]?(?:0|[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)(?:\.\d+)?)(?:円|株|口)?$/);
+  const token = wrapped?.[1] ?? plain?.[1];
+  if (!token) return null;
+  const cleaned = token.replace(/,/g, '');
   const number = Number(cleaned); if (!Number.isFinite(number)) return null;
   const canonical = cleaned.replace(/^\+/, '').replace(/^(-?)0+(?=\d)/, '$1');
   return canonical === '-0' ? '0' : canonical;
@@ -35,7 +39,7 @@ function codeFrom(value: string, section: CandidateSection): string | null {
   const token = compact(value).toUpperCase();
   const pattern = section === 'fund'
     ? /^[\[(（【](\d{3}\.\d{2})[\])）】]$/
-    : /^[\[(（【]([A-Z0-9]{4})[\])）】]$/;
+    : /^[\[(（【]([0-9][0-9A-HJ-NP-UW-Y][0-9][0-9A-HJ-NP-UW-Y])[\])）】]$/;
   return token.match(pattern)?.[1] ?? null;
 }
 function validText(value: string, max: number) { return value.length > 0 && value.length <= max && !FORBIDDEN.test(value); }
@@ -75,21 +79,47 @@ function trustedLines(page: OcrCandidatePage): TrustedLine[] {
   });
 }
 function sectionMarker(text: string): CandidateSection | 'other' | null {
-  if (text.includes('国内株式')) return 'domestic'; if (text.includes('投資信託')) return 'fund';
-  if (/(預り金|保証金|担保|信用取引|建玉|先物|オプション|債券|外国株|外貨|合計)/.test(text)) return 'other'; return null;
+  if (/(先物|オプション)/.test(text)) return 'other';
+  if (text === '国内株式') return 'domestic'; if (text === '投資信託') return 'fund';
+  if (/^(?:信用取引の?建玉残高|信用建玉残高)$/.test(text)) return 'margin';
+  if (/(預り金|保証金|担保|信用取引|建玉|債券|外国株|外貨|合計)/.test(text)) return 'other'; return null;
 }
-function isColumnHeader(text: string, section: CandidateSection) {
-  const hasName = /(銘柄|銘柄名)/.test(text);
-  if (section === 'fund') return hasName && /(数量|口数)/.test(text) && /(参考価格|基準価額)/.test(text) && /評価額/.test(text);
-  return hasName && /数量/.test(text) && /(取得価格|取得単価|単価)/.test(text) && /(買付金額|取得金額|金額)/.test(text);
+type HeaderSpec = { from: number; to: number; pattern: RegExp };
+function provenHeader(words: OcrCandidateWord[], width: number, specs: HeaderSpec[]) {
+  const matches = specs.map((spec) => words.find((word) => {
+    const center = ((word.bbox.x0 + word.bbox.x1) / 2) / width;
+    return center >= spec.from && center < spec.to && (word.bbox.x1 - word.bbox.x0) / width <= 0.14
+      && spec.pattern.test(compact(word.text));
+  }));
+  if (matches.some((word) => !word)) return false;
+  return matches.every((word, index) => index === 0 || word!.bbox.x0 > matches[index - 1]!.bbox.x0
+    && word!.bbox.x0 >= matches[index - 1]!.bbox.x1);
 }
-function sectionLines(lines: TrustedLine[]): SectionLine[] {
+function isColumnHeader(_text: string, section: CandidateSection, words: OcrCandidateWord[], width: number) {
+  if (section === 'margin') return provenHeader(words, width, [
+    { from: 0, to: 0.26, pattern: /銘柄/ }, { from: 0.26, to: 0.33, pattern: /指定/ },
+    { from: 0.33, to: 0.44, pattern: /数量/ }, { from: 0.44, to: 0.52, pattern: /区分/ },
+    { from: 0.52, to: 0.63, pattern: /約定年月日/ }, { from: 0.63, to: 0.72, pattern: /約定単価/ },
+    { from: 0.72, to: 0.79, pattern: /(?:時価|現在値)/ }, { from: 0.79, to: 0.85, pattern: /手数料/ },
+    { from: 0.85, to: 0.91, pattern: /評価損益/ }, { from: 0.91, to: 1.01, pattern: /(?:最終決済|決済予定)/ },
+  ]);
+  if (section === 'fund') return provenHeader(words, width, [
+    { from: 0, to: 0.4, pattern: /銘柄/ }, { from: 0.55, to: 0.7, pattern: /(?:数量|口数)/ },
+    { from: 0.7, to: 0.86, pattern: /(?:参考価格|基準価額)/ }, { from: 0.86, to: 1.01, pattern: /評価額/ },
+  ]);
+  return provenHeader(words, width, [
+    { from: 0, to: 0.4, pattern: /銘柄/ }, { from: 0.52, to: 0.66, pattern: /数量/ },
+    { from: 0.66, to: 0.84, pattern: /(?:取得価格|取得単価|単価)/ },
+    { from: 0.84, to: 1.01, pattern: /(?:買付金額|取得金額|金額)/ },
+  ]);
+}
+function sectionLines(lines: TrustedLine[], width: number): SectionLine[] {
   let section: CandidateSection | null = null; let columnsReady = false;
   return lines.map((trusted) => {
     if (trusted.tainted) { section = null; columnsReady = false; return { ...trusted, section: null, columnsReady: false }; }
     const marker = sectionMarker(trusted.text);
     if (marker !== null) { section = marker === 'other' ? null : marker; columnsReady = false; return { ...trusted, section: null, columnsReady: false }; }
-    if (section && isColumnHeader(trusted.text, section)) { columnsReady = true; return { ...trusted, section: null, columnsReady: false }; }
+    if (section && isColumnHeader(trusted.text, section, trusted.words, width)) { columnsReady = true; return { ...trusted, section: null, columnsReady: false }; }
     return { ...trusted, section, columnsReady }; });
 }
 function wordsInColumn(lines: SectionLine[], width: number, from: number, to: number) {
@@ -105,6 +135,58 @@ function nameIn(start: SectionLine, width: number, code: string, boundary: numbe
     .replace(/銘柄計/g, '').replace(/[\[\]()（）【】]/g, '');
 }
 function positive(value: string | null): value is string { return value !== null && Number(value) > 0; }
+function oneColumnValue(line: SectionLine, width: number, from: number, to: number) {
+  const values = wordsInColumn([line], width, from, to);
+  return values.length === 1 && values[0] ? compact(values[0]) : null;
+}
+function canonicalMarginDecimal(value: string, options: { scale: number; positive?: boolean; signed?: boolean }) {
+  const parsed = decimal(value);
+  if (parsed === null || (!options.signed && parsed.startsWith('-'))) return null;
+  const [integer, fraction = ''] = parsed.split('.');
+  if (integer.replace('-', '').length > 18 || fraction.length > options.scale) return null;
+  const trimmedFraction = fraction.replace(/0+$/, '');
+  const canonical = trimmedFraction ? `${integer}.${trimmedFraction}` : integer;
+  if (options.positive && /^-?0(?:\.0*)?$/.test(canonical)) return null;
+  return canonical;
+}
+function optionalMarginDecimal(
+  value: string | null,
+  options: { scale: number; positive?: boolean; signed?: boolean },
+) {
+  if (value === '-' || value === '―' || value === '－') return '';
+  return value === null ? null : canonicalMarginDecimal(value, options);
+}
+const MARGIN_MARKETS = { 東京: 'tokyo', PTS: 'private', 私設取引システム: 'private', 名古屋: 'nagoya', 福岡: 'fukuoka', 札幌: 'sapporo' } as const;
+function parseMarginLine(line: SectionLine, page: OcrCandidatePage): Record<string, string> | null {
+  const identity = oneColumnValue(line, page.width, 0, 0.26);
+  const designation = oneColumnValue(line, page.width, 0.26, 0.33);
+  const quantityMarket = oneColumnValue(line, page.width, 0.33, 0.44);
+  const classification = oneColumnValue(line, page.width, 0.44, 0.52);
+  const contractDate = isoDate(oneColumnValue(line, page.width, 0.52, 0.63) ?? '');
+  const contractUnitPrice = canonicalMarginDecimal(oneColumnValue(line, page.width, 0.63, 0.72) ?? '', { scale: 6, positive: true });
+  const currentPrice = optionalMarginDecimal(oneColumnValue(line, page.width, 0.72, 0.79), { scale: 6, positive: true });
+  const fees = optionalMarginDecimal(oneColumnValue(line, page.width, 0.79, 0.85), { scale: 2 });
+  const unrealizedPnl = optionalMarginDecimal(oneColumnValue(line, page.width, 0.85, 0.91), { scale: 2, signed: true });
+  const finalDate = isoDate(oneColumnValue(line, page.width, 0.91, 1.01) ?? '');
+  const identityMatch = identity?.match(/^(.*?)[\[(（【]([0-9][0-9A-HJ-NP-UW-Y][0-9][0-9A-HJ-NP-UW-Y])[\])）】](.+)$/u);
+  const quantityMatch = quantityMarket?.match(/^([+]?\d+(?:\.\d+)?)(?:株|口)?(東京|PTS|私設取引システム|名古屋|福岡|札幌)$/u);
+  const market = quantityMatch ? MARGIN_MARKETS[quantityMatch[2] as keyof typeof MARGIN_MARKETS] : null;
+  const quantity = quantityMatch ? canonicalMarginDecimal(quantityMatch[1], { scale: 6, positive: true }) : null;
+  const classificationMatch = classification?.match(/^(買|売)(未決済|決済ずみ)$/u);
+  const side = classificationMatch?.[1] === '買' ? 'buy' : classificationMatch?.[1] === '売' ? 'sell' : null;
+  const state = classificationMatch?.[2] === '未決済' ? 'open' : classificationMatch?.[2] === '決済ずみ' ? 'settled' : null;
+  if (!identityMatch || !validText(identityMatch[1], 100) || !validText(identityMatch[3], 50)
+    || designation === null || !quantityMatch || !quantity || !market || !side || !state || !contractDate || !finalDate
+    || !positive(contractUnitPrice) || currentPrice === null || fees === null || unrealizedPnl === null
+    || Number(quantityMatch[1]) <= 0 || finalDate < contractDate) return null;
+  const designationLabel = /^[-―－]$/.test(designation) ? '' : designation;
+  if (designationLabel && !validText(designationLabel, 50)) return null;
+  return { _localId: localId(page, 'margin', line, identityMatch[2]), state, securityCode: identityMatch[2],
+    securityName: identityMatch[1], repaymentTermLabel: identityMatch[3], designationLabel,
+    quantity, market, side, contractDate, contractUnitPrice,
+    currentPrice, fees, unrealizedPnl, finalSettlementOrPlannedDate: finalDate,
+    sourcePage: String(page.pageNumber), sourceRow: '' };
+}
 function verticallyCoherent(line: SectionLine, page: OcrCandidatePage) {
   const height = line.line.bbox.y1 - line.line.bbox.y0;
   if (height > Math.max(4, page.height * 0.025)) return false;
@@ -113,7 +195,7 @@ function verticallyCoherent(line: SectionLine, page: OcrCandidatePage) {
   return Math.max(...centers) - Math.min(...centers) <= Math.max(2, page.height * 0.005);
 }
 function localId(page: OcrCandidatePage, section: CandidateSection, start: SectionLine, code: string) {
-  return `${page.pageNumber}:${section}:${Math.round((start.line.bbox.y0 / page.height) * 100_000)}:${code}`;
+  return `${page.pageNumber}:${section}:${start.line.bbox.y0}:${page.height}:${code}`;
 }
 function exactIdentity(row: Record<string, string>) {
   return Object.keys(row).filter((key) => key !== '_localId').sort().map((key) => `${key}=${row[key]}`).join('\u001f');
@@ -121,12 +203,25 @@ function exactIdentity(row: Record<string, string>) {
 export function emptyBalanceReportOcrCandidates(): BalanceReportOcrCandidates {
   return { deposits: [], collateral: [], domesticStockLots: [], fundBalances: [], margin: [], limitReached: false };
 }
+function samePhysicalRow(left: Record<string, string>, right: Record<string, string>) {
+  if (exactIdentity(left) !== exactIdentity(right)) return false;
+  const parse = (value: string) => value.match(/^(\d+):(domestic|fund|margin):([0-9]+(?:\.[0-9]+)?):([0-9]+(?:\.[0-9]+)?):([^:]+)$/);
+  const a = parse(left._localId ?? ''); const b = parse(right._localId ?? '');
+  return Boolean(a && b && a[1] === b[1] && a[2] === b[2] && a[5] === b[5]
+    && Math.abs(Number(a[3]) / Number(a[4]) - Number(b[3]) / Number(b[4])) <= 0.003);
+}
 export function mergeBalanceReportOcrCandidates(current: BalanceReportOcrCandidates, next: BalanceReportOcrCandidates): BalanceReportOcrCandidates {
   const merged = emptyBalanceReportOcrCandidates(); merged.limitReached = current.limitReached === true || next.limitReached === true;
-  for (const key of CANDIDATE_KEYS) { const byLocalRow = new Map<string, Record<string, string>>();
-    for (const row of [...current[key], ...next[key]]) { const identity = validText(row._localId ?? '', 100) ? `local:${row._localId}` : `exact:${exactIdentity(row)}`; byLocalRow.set(identity, row); }
-    if (byLocalRow.size > MAX_CANDIDATES_PER_SECTION) merged.limitReached = true;
-    merged[key] = [...byLocalRow.values()].slice(0, MAX_CANDIDATES_PER_SECTION); }
+  for (const key of CANDIDATE_KEYS) {
+    const rows: Record<string, string>[] = [];
+    for (const row of [...current[key], ...next[key]]) {
+      const duplicate = rows.findIndex((existing) => samePhysicalRow(existing, row)
+        || (!validText(existing._localId ?? '', 100) && !validText(row._localId ?? '', 100) && exactIdentity(existing) === exactIdentity(row)));
+      if (duplicate >= 0) rows[duplicate] = row; else rows.push(row);
+    }
+    if (rows.length > MAX_CANDIDATES_PER_SECTION) merged.limitReached = true;
+    merged[key] = rows.slice(0, MAX_CANDIDATES_PER_SECTION);
+  }
   return merged;
 }
 export function countBalanceReportOcrCandidates(candidates: BalanceReportOcrCandidates) {
@@ -136,9 +231,14 @@ export function extractBalanceReportOcrCandidates(pages: OcrCandidatePage[]): Ba
   const result = emptyBalanceReportOcrCandidates();
   for (const page of pages) {
     if (!Number.isInteger(page.pageNumber) || page.pageNumber < 1 || !Number.isFinite(page.width) || page.width <= 0 || !Number.isFinite(page.height) || page.height <= 0) continue;
-    const lines = sectionLines(trustedLines(page));
+    const lines = sectionLines(trustedLines(page), page.width);
+    for (const entry of lines) {
+      if (entry.section !== 'margin' || !entry.columnsReady || !verticallyCoherent(entry, page)) continue;
+      const candidate = parseMarginLine(entry, page);
+      if (candidate) result.margin.push(candidate);
+    }
     const starts = lines.map((entry) => {
-      if (!entry.section || !entry.columnsReady || !verticallyCoherent(entry, page)) return null;
+      if (!entry.section || entry.section === 'margin' || !entry.columnsReady || !verticallyCoherent(entry, page)) return null;
       const range = entry.section === 'fund' ? [0.2, 0.45] : [0.2, 0.38];
       const codeWord = entry.words.find((word) => {
         const x = word.bbox.x0 / page.width;
@@ -146,7 +246,7 @@ export function extractBalanceReportOcrCandidates(pages: OcrCandidatePage[]): Ba
       });
       const code = codeWord ? codeFrom(codeWord.text, entry.section) : null;
       return code ? { line: entry, code, section: entry.section } : null;
-    }).filter((entry): entry is { line: SectionLine; code: string; section: CandidateSection } => entry !== null);
+    }).filter((entry): entry is { line: SectionLine; code: string; section: 'domestic' | 'fund' } => entry !== null);
     for (const start of starts) {
       const row = [start.line];
       if (start.section === 'fund') {
