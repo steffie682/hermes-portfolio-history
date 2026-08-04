@@ -468,6 +468,21 @@ describe('SBI balance report client', () => {
     expect(savedBody).not.toContain('masked-text');
   });
 
+  it('blocks form reflection when OCR candidate truncation reaches the cap', async () => {
+    const candidates = { deposits: [], collateral: [], domesticStockLots: [], fundBalances: [], margin: [], limitReached: true };
+    render(<SbiBalanceReportClient
+      accounts={[{ id: '11111111-1111-4111-8111-111111111111', displayName: '合成SBI口座' }]}
+      inspectPdf={vi.fn().mockResolvedValue({ ...emptyReport, pageCount: 10 })}
+      runOcr={vi.fn().mockResolvedValue({ report: ocrReport, candidates })}
+    />);
+    choose(pdfFile());
+    await screen.findByRole('heading', { name: '端末内の日本語OCR' });
+    fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('フォームへ反映・保存できません');
+    expect((screen.getByRole('button', { name: '候補をフォームに反映' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('heading', { name: '取引残高報告書を本人確認して保存' })).toBeNull();
+  });
+
   it('accumulates distinct candidate batches and deduplicates a repeated security candidate', async () => {
     const firstCandidates = {
       deposits: [], collateral: [], domesticStockLots: [], margin: [],

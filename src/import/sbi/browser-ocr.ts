@@ -1,3 +1,4 @@
+import { applySbiPiiMaskPlan, createSbiLocalPiiMaskPlan } from './local-pii-mask';
 import { extractBalanceReportOcrCandidates, emptyBalanceReportOcrCandidates, mergeBalanceReportOcrCandidates, type BalanceReportOcrCandidates, type OcrCandidateBlock } from './balance-report-ocr-candidates';
 const MAX_SOURCE_PAGES = 100;
 export const MAX_OCR_PAGES = 5;
@@ -280,6 +281,26 @@ function clearRecognitionData(data: { text: string; blocks?: OcrCandidateBlock[]
   data.blocks = null;
 }
 
+type OcrRecognition = { data: { text: string; blocks?: OcrCandidateBlock[] | null } };
+export async function rerunAfterLocalPiiMask(
+  first: OcrRecognition,
+  page: { width: number; height: number },
+  context: CanvasRenderingContext2D,
+  repeat: () => Promise<OcrRecognition>,
+) {
+  try {
+    const words = (first.data.blocks ?? []).flatMap((block) => block.paragraphs
+      .flatMap((paragraph) => paragraph.lines.flatMap((line) => line.words)));
+    const plan = createSbiLocalPiiMaskPlan(page, words);
+    if (!applySbiPiiMaskPlan(context, plan)) return { recognition: first, maskApplied: false };
+  } catch (error) {
+    clearRecognitionData(first.data);
+    throw error;
+  }
+  clearRecognitionData(first.data);
+  return { recognition: await repeat(), maskApplied: true };
+}
+
 export interface SbiBrowserOcrResult {
   report: ReturnType<ReturnType<typeof import('./ocr-safe-report')['createSbiOcrSafeReportBuilder']>['finish']>;
   candidates: BalanceReportOcrCandidates;
@@ -408,7 +429,18 @@ export async function runSbiBrowserOcr(
         },
         () => undefined,
       );
-      const result = await raceAbort(recognitionPromise, signal);
+      const firstResult = await raceAbort(recognitionPromise, signal);
+      let result = firstResult;
+      const masked = await rerunAfterLocalPiiMask(firstResult, { width: canvas.width, height: canvas.height }, context, async () => {
+        signal.throwIfAborted();
+        const repeatedPromise = worker!.recognize(canvas!, {}, { text: true, blocks: true });
+        void repeatedPromise.then(
+          (lateResult) => { if (signal.aborted) clearRecognitionData(lateResult.data); },
+          () => undefined,
+        );
+        return raceAbort(repeatedPromise, signal);
+      });
+      result = masked.recognition;
       try {
         signal.throwIfAborted();
         candidates = mergeBalanceReportOcrCandidates(candidates, extractBalanceReportOcrCandidates([{

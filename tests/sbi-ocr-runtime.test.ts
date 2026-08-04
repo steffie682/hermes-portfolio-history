@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createControlledWorkerController,
   restoreWorkerConstructor,
+  rerunAfterLocalPiiMask,
   runSbiBrowserOcr,
   validateOcrPageRange,
   type BrowserOcrDependencies,
@@ -31,6 +32,49 @@ const createMockWorkerController: BrowserOcrDependencies['createWorkerController
     },
   };
 };
+
+describe('SBI local PII masking runtime', () => {
+  it('burns trusted local masks, clears the first recognition, and returns only the second recognition', async () => {
+    const words = [
+      ['お名前', 50, 60], ['合成秘密名', 180, 60], ['ご住所', 50, 100], ['合成県秘密市', 180, 100],
+      ['口座番号', 50, 140], ['0123456789', 180, 140], ['国内株式', 50, 300], ['銘柄名', 50, 330], ['数量', 560, 330], ['取得価格', 690, 330], ['買付金額', 860, 330],
+    ].map(([text, x, y]) => ({ text: String(text), confidence: 95,
+      bbox: { x0: Number(x), y0: Number(y), x1: Number(x) + 100, y1: Number(y) + 20 } }));
+    const first = { data: { text: '合成秘密名 0123456789', blocks: [{ paragraphs: [{ lines: [{
+      text: words.map((word) => word.text).join(' '), confidence: 95, bbox: { x0: 0, y0: 50, x1: 900, y1: 360 }, words,
+    }] }] }] } };
+    const second = { data: { text: '信用取引の建玉残高', blocks: [{ paragraphs: [] }] } };
+    const fillRect = vi.fn();
+    const context = { fillStyle: '', fillRect } as unknown as CanvasRenderingContext2D;
+    const repeat = vi.fn().mockResolvedValue(second);
+
+    const result = await rerunAfterLocalPiiMask(first, { width: 1_000, height: 1_400 }, context, repeat);
+
+    expect(result).toEqual({ recognition: second, maskApplied: true });
+    expect(repeat).toHaveBeenCalledOnce();
+    expect(fillRect).toHaveBeenCalledTimes(1);
+    expect(first.data.text).toBe('');
+    expect(first.data.blocks).toBeNull();
+  });
+  it('clears the first recognition when local mask drawing fails', async () => {
+    const words = ['お名前', 'ご住所', '口座番号'].map((text, index) => ({ text, confidence: 95,
+      bbox: { x0: 50, y0: 60 + index * 40, x1: 150, y1: 80 + index * 40 } }));
+    words.push({ text: '国内株式', confidence: 95, bbox: { x0: 50, y0: 300, x1: 150, y1: 320 } },
+      { text: '銘柄名', confidence: 95, bbox: { x0: 50, y0: 330, x1: 150, y1: 350 } },
+      { text: '数量', confidence: 95, bbox: { x0: 560, y0: 330, x1: 640, y1: 350 } },
+      { text: '取得価格', confidence: 95, bbox: { x0: 690, y0: 330, x1: 770, y1: 350 } },
+      { text: '買付金額', confidence: 95, bbox: { x0: 860, y0: 330, x1: 940, y1: 350 } });
+    const first = { data: { text: 'SYNTHETIC-PII-CANARY', blocks: [{ paragraphs: [{ lines: [{
+      text: words.map((word) => word.text).join(' '), confidence: 95, bbox: { x0: 0, y0: 50, x1: 900, y1: 360 }, words,
+    }] }] }] } };
+    const context = { fillStyle: '', fillRect: vi.fn(() => { throw new Error('canvas-write-failed'); }) } as unknown as CanvasRenderingContext2D;
+
+    await expect(rerunAfterLocalPiiMask(first, { width: 1_000, height: 1_400 }, context, vi.fn()))
+      .rejects.toThrow('canvas-write-failed');
+    expect(first.data.text).toBe('');
+    expect(first.data.blocks).toBeNull();
+  });
+});
 
 describe('SBI browser OCR range', () => {
   it.each([

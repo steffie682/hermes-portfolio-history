@@ -53,6 +53,30 @@ describe('full balance report checkpoint form', () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
   });
 
+  it('initializes reviewed margin candidates as editable rows without source locators', () => {
+    const base = { state: 'open', securityCode: '1234', securityName: '合成建設', repaymentTermLabel: '6ヶ月',
+      designationLabel: '', quantity: '100', market: 'tokyo', side: 'buy', contractDate: '2024-01-15',
+      contractUnitPrice: '1000', currentPrice: '900', fees: '', unrealizedPnl: '-10000',
+      finalSettlementOrPlannedDate: '2024-07-15', sourcePage: '', sourceRow: '' };
+    render(<BalanceReportPositionForm sourcePageCount={7} accounts={accounts} initialCandidates={{
+      deposits: [], collateral: [], domesticStockLots: [], fundBalances: [],
+      margin: [base, { ...base, _localId: 'synthetic-row-2', securityCode: '5678', securityName: '合成工業' }],
+      limitReached: false,
+    }} />);
+    expect((screen.getByLabelText('原本記載の明細を入力する', { selector: 'input[name="margin-mode"]' }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByDisplayValue('合成建設')).toBeTruthy();
+    expect(screen.getByDisplayValue('合成工業')).toBeTruthy();
+    expect(screen.getAllByLabelText('元PDFのページ').slice(-2).map((field) => (field as HTMLInputElement).value)).toEqual(['', '']);
+  });
+
+  it('blocks saving when a reusable form receives truncated candidates directly', () => {
+    render(<BalanceReportPositionForm sourcePageCount={7} accounts={accounts} initialCandidates={{
+      deposits: [], collateral: [], domesticStockLots: [], fundBalances: [], margin: [], limitReached: true,
+    }} />);
+    expect(screen.getByRole('alert').textContent).toContain('このフォームは保存できません');
+    expect((screen.getByRole('button', { name: '確認した残高証拠を保存' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('does not claim candidates were inserted when every candidate array is empty', () => {
     render(<BalanceReportPositionForm sourcePageCount={7} accounts={accounts} initialCandidates={{
       deposits: [], collateral: [], domesticStockLots: [], fundBalances: [], margin: [], limitReached: true,
