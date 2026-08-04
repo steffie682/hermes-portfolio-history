@@ -79,10 +79,12 @@ function trustedLines(page: OcrCandidatePage): TrustedLine[] {
   });
 }
 function sectionMarker(text: string): CandidateSection | 'other' | null {
-  if (/(先物|オプション)/.test(text)) return 'other';
-  if (text === '国内株式') return 'domestic'; if (text === '投資信託') return 'fund';
-  if (/^(?:信用取引の?建玉残高|信用建玉残高)$/.test(text)) return 'margin';
-  if (/(預り金|保証金|担保|信用取引|建玉|債券|外国株|外貨|合計)/.test(text)) return 'other'; return null;
+  const wrapped = text.match(/^(?:【(.+)】|\[(.+)\])$/u);
+  const marker = wrapped?.[1] ?? wrapped?.[2] ?? text;
+  if (/(先物|オプション)/.test(marker)) return 'other';
+  if (marker === '国内株式') return 'domestic'; if (marker === '投資信託') return 'fund';
+  if (/^(?:信用取引の?建玉残高|信用建玉残高)$/.test(marker)) return 'margin';
+  if (/(預り金|保証金|担保|信用取引|建玉|債券|外国株|外貨|合計)/.test(marker)) return 'other'; return null;
 }
 type HeaderSpec = { from: number; to: number; pattern: RegExp };
 function provenHeader(words: OcrCandidateWord[], width: number, specs: HeaderSpec[]) {
@@ -96,13 +98,22 @@ function provenHeader(words: OcrCandidateWord[], width: number, specs: HeaderSpe
     && word!.bbox.x0 >= matches[index - 1]!.bbox.x1);
 }
 function isColumnHeader(_text: string, section: CandidateSection, words: OcrCandidateWord[], width: number) {
-  if (section === 'margin') return provenHeader(words, width, [
-    { from: 0, to: 0.26, pattern: /銘柄/ }, { from: 0.26, to: 0.33, pattern: /指定/ },
-    { from: 0.33, to: 0.44, pattern: /数量/ }, { from: 0.44, to: 0.52, pattern: /区分/ },
-    { from: 0.52, to: 0.63, pattern: /約定年月日/ }, { from: 0.63, to: 0.72, pattern: /約定単価/ },
-    { from: 0.72, to: 0.79, pattern: /(?:時価|現在値)/ }, { from: 0.79, to: 0.85, pattern: /手数料/ },
-    { from: 0.85, to: 0.91, pattern: /評価損益/ }, { from: 0.91, to: 1.01, pattern: /(?:最終決済|決済予定)/ },
-  ]);
+  if (section === 'margin') {
+    const liveSbi = provenHeader(words, width, [
+      { from: 0, to: 0.26, pattern: /銘柄/ }, { from: 0.24, to: 0.33, pattern: /コード/ },
+      { from: 0.29, to: 0.39, pattern: /数量/ }, { from: 0.35, to: 0.48, pattern: /区分/ },
+      { from: 0.43, to: 0.56, pattern: /約定年月日/ }, { from: 0.5, to: 0.66, pattern: /約定単価/ },
+      { from: 0.59, to: 0.75, pattern: /(?:時価|現在値)/ }, { from: 0.68, to: 0.84, pattern: /手数料/ },
+      { from: 0.77, to: 0.93, pattern: /評価損益/ }, { from: 0.88, to: 1.01, pattern: /(?:最終決済|決済予定)/ },
+    ]);
+    return liveSbi || provenHeader(words, width, [
+      { from: 0, to: 0.26, pattern: /銘柄/ }, { from: 0.26, to: 0.33, pattern: /指定/ },
+      { from: 0.33, to: 0.44, pattern: /数量/ }, { from: 0.44, to: 0.52, pattern: /区分/ },
+      { from: 0.52, to: 0.63, pattern: /約定年月日/ }, { from: 0.63, to: 0.72, pattern: /約定単価/ },
+      { from: 0.72, to: 0.79, pattern: /(?:時価|現在値)/ }, { from: 0.79, to: 0.85, pattern: /手数料/ },
+      { from: 0.85, to: 0.91, pattern: /評価損益/ }, { from: 0.91, to: 1.01, pattern: /(?:最終決済|決済予定)/ },
+    ]);
+  }
   if (section === 'fund') return provenHeader(words, width, [
     { from: 0, to: 0.4, pattern: /銘柄/ }, { from: 0.55, to: 0.7, pattern: /(?:数量|口数)/ },
     { from: 0.7, to: 0.86, pattern: /(?:参考価格|基準価額)/ }, { from: 0.86, to: 1.01, pattern: /評価額/ },
@@ -153,10 +164,64 @@ function optionalMarginDecimal(
   value: string | null,
   options: { scale: number; positive?: boolean; signed?: boolean },
 ) {
-  if (value === '-' || value === '―' || value === '－') return '';
-  return value === null ? null : canonicalMarginDecimal(value, options);
+  if (value === null || value === '-' || value === '―' || value === '－') return '';
+  return canonicalMarginDecimal(value, options);
 }
 const MARGIN_MARKETS = { 東京: 'tokyo', PTS: 'private', 私設取引システム: 'private', 名古屋: 'nagoya', 福岡: 'fukuoka', 札幌: 'sapporo' } as const;
+const LIVE_MARGIN_PRIMARY_COLUMNS: Array<[number, number]> = [
+  [0, 0.24], [0.24, 0.29], [0.29, 0.35], [0.35, 0.43], [0.43, 0.5],
+  [0.5, 0.59], [0.59, 0.68], [0.68, 0.77], [0.77, 0.88], [0.88, 1.01],
+];
+const LIVE_MARGIN_CONTINUATION_COLUMNS: Array<[number, number]> = [[0, 0.24], [0.29, 0.35], [0.35, 0.43]];
+function wordsFitColumns(line: SectionLine, width: number, columns: Array<[number, number]>) {
+  const sorted = [...line.words].sort((left, right) => left.bbox.x0 - right.bbox.x0);
+  return sorted.every((word, index) => columns.some(([from, to]) => word.bbox.x0 / width >= from
+    && word.bbox.x1 / width <= to) && (index === 0 || word.bbox.x0 >= sorted[index - 1].bbox.x1));
+}
+function sameLiveMarginRow(primary: SectionLine, secondary: SectionLine, page: OcrCandidatePage) {
+  const primaryHeight = primary.line.bbox.y1 - primary.line.bbox.y0;
+  const secondaryHeight = secondary.line.bbox.y1 - secondary.line.bbox.y0;
+  const parentGap = secondary.line.bbox.y0 - primary.line.bbox.y1;
+  const primaryWordBottom = Math.max(...primary.words.map((word) => word.bbox.y1));
+  const secondaryWordTop = Math.min(...secondary.words.map((word) => word.bbox.y0));
+  const minimumWordHeight = Math.min(...[...primary.words, ...secondary.words]
+    .map((word) => word.bbox.y1 - word.bbox.y0));
+  const wordGap = secondaryWordTop - primaryWordBottom;
+  return parentGap >= 0 && parentGap <= Math.max(2, Math.min(primaryHeight, secondaryHeight) * 0.5)
+    && wordGap >= 0 && wordGap <= Math.max(2, minimumWordHeight * 0.5)
+    && wordsFitColumns(primary, page.width, LIVE_MARGIN_PRIMARY_COLUMNS)
+    && wordsFitColumns(secondary, page.width, LIVE_MARGIN_CONTINUATION_COLUMNS);
+}
+function parseLiveSbiMarginLines(primary: SectionLine, secondary: SectionLine, page: OcrCandidatePage): Record<string, string> | null {
+  const identity = oneColumnValue(primary, page.width, 0, 0.24);
+  const code = oneColumnValue(primary, page.width, 0.24, 0.29)?.toUpperCase() ?? null;
+  const quantityValue = oneColumnValue(primary, page.width, 0.29, 0.35);
+  const marketValue = oneColumnValue(secondary, page.width, 0.29, 0.35);
+  const sideValue = oneColumnValue(primary, page.width, 0.35, 0.43);
+  const stateValue = oneColumnValue(secondary, page.width, 0.35, 0.43);
+  const designation = oneColumnValue(secondary, page.width, 0, 0.24);
+  const contractDate = isoDate(oneColumnValue(primary, page.width, 0.43, 0.5) ?? '');
+  const contractUnitPrice = canonicalMarginDecimal(oneColumnValue(primary, page.width, 0.5, 0.59) ?? '', { scale: 6, positive: true });
+  const currentPrice = optionalMarginDecimal(oneColumnValue(primary, page.width, 0.59, 0.68), { scale: 6, positive: true });
+  const fees = optionalMarginDecimal(oneColumnValue(primary, page.width, 0.68, 0.77), { scale: 2 });
+  const unrealizedPnl = optionalMarginDecimal(oneColumnValue(primary, page.width, 0.77, 0.88), { scale: 2, signed: true });
+  const finalDate = isoDate(oneColumnValue(primary, page.width, 0.88, 1.01) ?? '');
+  const identityMatch = identity?.match(/^(.*?)[(（]([^()（）]*期限)[)）]$/u);
+  const codeMatch = code?.match(/^([0-9][0-9A-HJ-NP-UW-Y][0-9][0-9A-HJ-NP-UW-Y])$/u);
+  const quantity = canonicalMarginDecimal(quantityValue ?? '', { scale: 6, positive: true });
+  const market = marketValue ? MARGIN_MARKETS[marketValue as keyof typeof MARGIN_MARKETS] ?? null : null;
+  const side = sideValue === '買' ? 'buy' : sideValue === '売' ? 'sell' : null;
+  const state = stateValue === '未決済' ? 'open' : stateValue === '決済ずみ' ? 'settled' : null;
+  if (!identityMatch || !validText(identityMatch[1], 100) || !validText(identityMatch[2], 50) || !codeMatch
+    || (designation !== null && !validText(designation, 50)) || !quantity || !market || !side || !state
+    || !contractDate || !positive(contractUnitPrice) || currentPrice === null || fees === null || unrealizedPnl === null
+    || !finalDate || finalDate < contractDate) return null;
+  const designationLabel = designation === null || /^[-―－]$/.test(designation) ? '' : designation;
+  return { _localId: localId(page, 'margin', primary, codeMatch[1]), state, securityCode: codeMatch[1],
+    securityName: identityMatch[1], repaymentTermLabel: identityMatch[2], designationLabel,
+    quantity, market, side, contractDate, contractUnitPrice, currentPrice, fees, unrealizedPnl,
+    finalSettlementOrPlannedDate: finalDate, sourcePage: String(page.pageNumber), sourceRow: '' };
+}
 function parseMarginLine(line: SectionLine, page: OcrCandidatePage): Record<string, string> | null {
   const identity = oneColumnValue(line, page.width, 0, 0.26);
   const designation = oneColumnValue(line, page.width, 0.26, 0.33);
@@ -232,9 +297,15 @@ export function extractBalanceReportOcrCandidates(pages: OcrCandidatePage[]): Ba
   for (const page of pages) {
     if (!Number.isInteger(page.pageNumber) || page.pageNumber < 1 || !Number.isFinite(page.width) || page.width <= 0 || !Number.isFinite(page.height) || page.height <= 0) continue;
     const lines = sectionLines(trustedLines(page), page.width);
-    for (const entry of lines) {
+    for (let index = 0; index < lines.length; index += 1) {
+      const entry = lines[index];
       if (entry.section !== 'margin' || !entry.columnsReady || !verticallyCoherent(entry, page)) continue;
-      const candidate = parseMarginLine(entry, page);
+      let candidate = parseMarginLine(entry, page);
+      const secondary = lines[index + 1];
+      if (!candidate && secondary?.section === 'margin' && secondary.columnsReady && !secondary.tainted
+        && verticallyCoherent(secondary, page) && sameLiveMarginRow(entry, secondary, page)) {
+        candidate = parseLiveSbiMarginLines(entry, secondary, page);
+      }
       if (candidate) result.margin.push(candidate);
     }
     const starts = lines.map((entry) => {

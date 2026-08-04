@@ -13,6 +13,11 @@ function line(y: number, entries: Array<[string, number]>) {
     words: entries.map(([text, x]) => ({ text, confidence: 90, bbox: { x0: x, y0: y, x1: x + 60, y1: y + 15 } })),
   };
 }
+function preciseLine(y: number, entries: Array<[string, number, number]>) {
+  const result = line(y, entries.map(([text, x]) => [text, x]));
+  result.words.forEach((word, index) => { word.bbox.x1 = entries[index][1] + entries[index][2]; });
+  return result;
+}
 function page(pageNumber: number, lines: ReturnType<typeof line>[]): OcrCandidatePage {
   return { pageNumber, width: 1_000, height: 1_400, blocks: [{ paragraphs: [{ lines }] }] };
 }
@@ -326,6 +331,55 @@ describe('SBI balance-report on-device OCR candidates', () => {
     const first = extractBalanceReportOcrCandidates([candidatePage(120)]);
     const repeated = extractBalanceReportOcrCandidates([candidatePage(121)]);
     expect(mergeBalanceReportOcrCandidates(first, repeated).margin).toHaveLength(1);
+  });
+
+  it('extracts the live SBI two-line margin layout with a separate code column', () => {
+    const candidates = extractBalanceReportOcrCandidates([page(6, [
+      line(70, [['【信用取引の建玉残高】', 40]]),
+      line(90, [['銘柄名（弁済期限）', 20], ['コード', 265], ['数量・市場', 330], ['区分', 390],
+        ['約定年月日', 490], ['約定単価', 560], ['作成基準日現在の時価', 660], ['手数料その他経費', 760],
+        ['評価損益', 850], ['最終決済期日または決済予定日', 920]]),
+      preciseLine(120, [['合成建設（6ヶ月期限）', 20, 215], ['1234', 265, 25], ['100株', 330, 20], ['買', 390, 20],
+        ['2024.6.20', 440, 50], ['223円', 520, 50], ['2024.6.27', 900, 70]]),
+      preciseLine(136, [['特定対象', 200, 35], ['東京', 330, 20], ['決済ずみ', 390, 35]]),
+    ])]);
+    expect(candidates.margin).toEqual([expect.objectContaining({
+      securityCode: '1234', securityName: '合成建設', repaymentTermLabel: '6ヶ月期限',
+      designationLabel: '特定対象', quantity: '100', market: 'tokyo', side: 'buy', state: 'settled',
+      contractDate: '2024-06-20', contractUnitPrice: '223', currentPrice: '', fees: '', unrealizedPnl: '',
+      finalSettlementOrPlannedDate: '2024-06-27', sourcePage: '6', sourceRow: '',
+    })]);
+  });
+
+  it('rejects an overlapping live header and a low-confidence live continuation', () => {
+    const header = () => line(90, [['銘柄名（弁済期限）', 20], ['コード', 265], ['数量・市場', 330], ['区分', 390],
+      ['約定年月日', 490], ['約定単価', 560], ['作成基準日現在の時価', 660], ['手数料その他経費', 760],
+      ['評価損益', 850], ['最終決済期日または決済予定日', 920]]);
+    const primary = () => preciseLine(120, [['合成建設（6ヶ月期限）', 20, 215], ['1234', 265, 25],
+      ['100株', 330, 20], ['買', 390, 20], ['2024.6.20', 440, 50], ['223円', 520, 50], ['2024.6.27', 900, 70]]);
+    const continuation = (y = 136, designation = true) => preciseLine(y, [
+      ...(designation ? [['特定対象', 200, 35] as [string, number, number]] : []),
+      ['東京', 330, 20], ['決済ずみ', 390, 35],
+    ]);
+    const overlapping = header(); overlapping.words[1].bbox.x1 = 390;
+    const low = continuation(); low.words[2].confidence = 65;
+    const section = line(70, [['【信用取引の建玉残高】', 40]]);
+    expect(extractBalanceReportOcrCandidates([page(6, [section, overlapping, primary(), continuation()])]).margin).toEqual([]);
+    expect(extractBalanceReportOcrCandidates([page(6, [section, header(), primary(), low])]).margin).toEqual([]);
+
+    const crossRowContinuation = continuation(150);
+    expect(extractBalanceReportOcrCandidates([page(6, [section, header(), primary(), crossRowContinuation])]).margin).toEqual([]);
+
+    const paddedPrimary = primary(); paddedPrimary.bbox.y1 = 150;
+    const splitWordBand = continuation(150); splitWordBand.bbox.y1 = 180;
+    for (const word of splitWordBand.words) { word.bbox.y0 = 175; word.bbox.y1 = 180; }
+    expect(extractBalanceReportOcrCandidates([page(6, [section, header(), paddedPrimary, splitWordBand])]).margin).toEqual([]);
+
+    const spanningPrimary = primary(); spanningPrimary.words[1].bbox.x1 = 340;
+    expect(extractBalanceReportOcrCandidates([page(6, [section, header(), spanningPrimary, continuation()])]).margin).toEqual([]);
+
+    expect(extractBalanceReportOcrCandidates([page(6, [section, header(), primary(), continuation(136, false)])]).margin)
+      .toEqual([expect.objectContaining({ designationLabel: '' })]);
   });
 
   it('extracts a complete self-contained margin row after a trusted margin header', () => {
