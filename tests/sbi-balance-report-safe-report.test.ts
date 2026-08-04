@@ -90,6 +90,8 @@ describe('SBI balance report safe structure', () => {
       items: [
         { text: '取引残高報告書', x: 103, y: 801, width: 120, height: 12 },
         { text: '信用取引 建玉明細', x: 98, y: 700, width: 130, height: 12 },
+        { text: '作成基準日 現在の時価', x: 240, y: 680, width: 130, height: 12 },
+        { text: '手数料 その他経費', x: 380, y: 680, width: 100, height: 12 },
         { text: 'SECRET_NAME', x: 401, y: 801, width: 80, height: 12 },
         { text: '123-4567890', x: 401, y: 780, width: 80, height: 12 },
         { text: 'SECRET_SECURITY', x: 100, y: 650, width: 90, height: 12 },
@@ -102,11 +104,13 @@ describe('SBI balance report safe structure', () => {
       schemaVersion: 1,
       documentKind: 'sbi-balance-report-structure',
       pageCount: 1,
-      pages: [{ rawItemCount: 7, discardedItemCount: 0 }],
+      pages: [{ rawItemCount: 9, discardedItemCount: 0 }],
     });
     expect(report.pages[0].items).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'known-label', labels: ['取引残高報告書'], x: 100, y: 800 }),
       expect.objectContaining({ kind: 'known-label', labels: ['信用取引', '建玉'], x: 100, y: 700 }),
+      expect.objectContaining({ kind: 'known-label', labels: ['作成基準日現在の時価'] }),
+      expect.objectContaining({ kind: 'known-label', labels: ['手数料その他経費'] }),
       expect.objectContaining({ kind: 'date' }),
       expect.objectContaining({ kind: 'number' }),
       expect.objectContaining({ kind: 'masked-text' }),
