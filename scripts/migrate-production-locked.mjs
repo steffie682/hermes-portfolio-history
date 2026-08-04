@@ -48,24 +48,57 @@ function safeSqlState(value) {
   return /^[0-9A-Z]{5}$/.test(code) ? code : 'unknown';
 }
 
+function extractSqlState(error) {
+  const seen = new Set();
+  let current = error;
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (!current || typeof current !== 'object' || seen.has(current)) return 'unknown';
+    seen.add(current);
+    try {
+      if ('code' in current) {
+        const code = safeSqlState(current.code);
+        if (code !== 'unknown') return code;
+      }
+      current = 'cause' in current ? current.cause : undefined;
+    } catch {
+      return 'unknown';
+    }
+  }
+  return 'unknown';
+}
+
 export class ProductionMigrationError extends Error {
   constructor(stage, cause) {
     super('Production migration failed.');
     this.name = 'ProductionMigrationError';
     this.stage = safeStage(stage);
-    this.sqlState = safeSqlState(cause && typeof cause === 'object' && 'code' in cause ? cause.code : undefined);
+    this.sqlState = extractSqlState(cause);
     this.cause = cause;
   }
 }
 
 function tagged(stage, error) {
-  const cause = error instanceof ProductionMigrationError ? error.cause ?? error : error;
+  let cause = error;
+  try {
+    if (error instanceof ProductionMigrationError) cause = error.cause ?? error;
+  } catch {
+    cause = error;
+  }
   return new ProductionMigrationError(safeStage(stage), cause);
 }
 
 export function formatProductionMigrationError(error) {
-  const stage = safeStage(error instanceof ProductionMigrationError ? error.stage : 'unknown');
-  const sqlState = safeSqlState(error instanceof ProductionMigrationError ? error.sqlState : 'unknown');
+  let stage = 'unknown';
+  let sqlState = 'unknown';
+  try {
+    if (error instanceof ProductionMigrationError) {
+      stage = safeStage(error.stage);
+      sqlState = safeSqlState(error.sqlState);
+    }
+  } catch {
+    stage = 'unknown';
+    sqlState = 'unknown';
+  }
   return `Production migration failed (stage=${stage}, sqlstate=${sqlState}).`;
 }
 

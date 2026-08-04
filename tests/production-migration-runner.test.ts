@@ -94,6 +94,31 @@ describe('serialized production migration runner', () => {
       .toBe('Production migration failed (stage=unknown, sqlstate=unknown).');
   });
 
+  it('extracts only a validated SQLSTATE through bounded nested causes', () => {
+    const postgresFailure = Object.assign(new Error('secret database detail'), { code: '42501' });
+    const drizzleFailure = new Error('secret query detail', { cause: postgresFailure });
+    const wrapped = new ProductionMigrationError('migration', drizzleFailure);
+    expect(formatProductionMigrationError(wrapped))
+      .toBe('Production migration failed (stage=migration, sqlstate=42501).');
+
+    const cyclic = Object.assign(new Error('cycle secret'), { code: 'bad\nvalue' }) as Error & { cause?: unknown };
+    cyclic.cause = cyclic;
+    expect(formatProductionMigrationError(new ProductionMigrationError('migration', cyclic)))
+      .toBe('Production migration failed (stage=migration, sqlstate=unknown).');
+
+    const throwingCause = new Proxy({}, {
+      has: () => { throw new Error('getter secret'); },
+      get: () => { throw new Error('getter secret'); },
+    });
+    const safeWrapper = new ProductionMigrationError('migration', throwingCause);
+    expect(safeWrapper.sqlState).toBe('unknown');
+    const throwingWrapper = new Proxy(safeWrapper, {
+      get: () => { throw new Error('wrapper secret'); },
+    });
+    expect(formatProductionMigrationError(throwingWrapper))
+      .toBe('Production migration failed (stage=unknown, sqlstate=unknown).');
+  });
+
   it('reclassifies an already-tagged error at the current trusted boundary', async () => {
     const forged = new ProductionMigrationError(
       'migration\nLEAKED' as never,
