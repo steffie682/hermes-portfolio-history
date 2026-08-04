@@ -48,6 +48,42 @@ function safeSqlState(value) {
   return /^[0-9A-Z]{5}$/.test(code) ? code : 'unknown';
 }
 
+const PRODUCTION_MIGRATION_REASONS = new Set([
+  'configuration_missing', 'migration_history_mismatch', 'migration_table_upgrade_missing',
+  'driver_transaction_unsupported', 'postgres_error', 'unknown',
+]);
+
+function safeReason(reason) {
+  return typeof reason === 'string' && PRODUCTION_MIGRATION_REASONS.has(reason) ? reason : 'unknown';
+}
+
+function classifyReason(error, sqlState) {
+  if (sqlState !== 'unknown') return 'postgres_error';
+  const seen = new Set();
+  let current = error;
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (!current || typeof current !== 'object' || seen.has(current)) return 'unknown';
+    seen.add(current);
+    try {
+      const message = 'message' in current ? String(current.message) : '';
+      if (message.startsWith('While upgrading your database migrations table we found ')
+        && message.endsWith(' migrations were applied to the database but are missing from the local environment')) {
+        return 'migration_history_mismatch';
+      }
+      if (message.startsWith('No upgrade path from migration table version ')) {
+        return 'migration_table_upgrade_missing';
+      }
+      if (/^(this\.client|client)\.begin is not a function$/.test(message)) {
+        return 'driver_transaction_unsupported';
+      }
+      current = 'cause' in current ? current.cause : undefined;
+    } catch {
+      return 'unknown';
+    }
+  }
+  return 'unknown';
+}
+
 function extractSqlState(error) {
   const seen = new Set();
   let current = error;
@@ -73,6 +109,7 @@ export class ProductionMigrationError extends Error {
     this.name = 'ProductionMigrationError';
     this.stage = safeStage(stage);
     this.sqlState = extractSqlState(cause);
+    this.reason = stage === 'configuration' ? 'configuration_missing' : classifyReason(cause, this.sqlState);
     this.cause = cause;
   }
 }
@@ -90,16 +127,19 @@ function tagged(stage, error) {
 export function formatProductionMigrationError(error) {
   let stage = 'unknown';
   let sqlState = 'unknown';
+  let reason = 'unknown';
   try {
     if (error instanceof ProductionMigrationError) {
       stage = safeStage(error.stage);
       sqlState = safeSqlState(error.sqlState);
+      reason = safeReason(error.reason);
     }
   } catch {
     stage = 'unknown';
     sqlState = 'unknown';
+    reason = 'unknown';
   }
-  return `Production migration failed (stage=${stage}, sqlstate=${sqlState}).`;
+  return `Production migration failed (stage=${stage}, sqlstate=${sqlState}, reason=${reason}).`;
 }
 
 export async function runLockedMigration({

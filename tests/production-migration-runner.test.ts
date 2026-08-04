@@ -91,7 +91,7 @@ describe('serialized production migration runner', () => {
     );
     expect(forged).toMatchObject({ stage: 'unknown', sqlState: 'unknown' });
     expect(formatProductionMigrationError(forged))
-      .toBe('Production migration failed (stage=unknown, sqlstate=unknown).');
+      .toBe('Production migration failed (stage=unknown, sqlstate=unknown, reason=unknown).');
   });
 
   it('extracts only a validated SQLSTATE through bounded nested causes', () => {
@@ -99,12 +99,12 @@ describe('serialized production migration runner', () => {
     const drizzleFailure = new Error('secret query detail', { cause: postgresFailure });
     const wrapped = new ProductionMigrationError('migration', drizzleFailure);
     expect(formatProductionMigrationError(wrapped))
-      .toBe('Production migration failed (stage=migration, sqlstate=42501).');
+      .toBe('Production migration failed (stage=migration, sqlstate=42501, reason=postgres_error).');
 
     const cyclic = Object.assign(new Error('cycle secret'), { code: 'bad\nvalue' }) as Error & { cause?: unknown };
     cyclic.cause = cyclic;
     expect(formatProductionMigrationError(new ProductionMigrationError('migration', cyclic)))
-      .toBe('Production migration failed (stage=migration, sqlstate=unknown).');
+      .toBe('Production migration failed (stage=migration, sqlstate=unknown, reason=unknown).');
 
     const throwingCause = new Proxy({}, {
       has: () => { throw new Error('getter secret'); },
@@ -116,7 +116,26 @@ describe('serialized production migration runner', () => {
       get: () => { throw new Error('wrapper secret'); },
     });
     expect(formatProductionMigrationError(throwingWrapper))
-      .toBe('Production migration failed (stage=unknown, sqlstate=unknown).');
+      .toBe('Production migration failed (stage=unknown, sqlstate=unknown, reason=unknown).');
+  });
+
+  it('classifies only fixed known migration reasons without exposing message details', () => {
+    const history = new Error(
+      'While upgrading your database migrations table we found 2 migrations (ids: synthetic) in the database that do not match any local migration. This means that some migrations were applied to the database but are missing from the local environment',
+    );
+    expect(formatProductionMigrationError(new ProductionMigrationError('migration', history)))
+      .toBe('Production migration failed (stage=migration, sqlstate=unknown, reason=migration_history_mismatch).');
+    expect(formatProductionMigrationError(new ProductionMigrationError(
+      'migration', new Error('No upgrade path from migration table version 9 to 10'),
+    ))).toBe('Production migration failed (stage=migration, sqlstate=unknown, reason=migration_table_upgrade_missing).');
+    expect(formatProductionMigrationError(new ProductionMigrationError(
+      'migration', new TypeError('this.client.begin is not a function'),
+    ))).toBe('Production migration failed (stage=migration, sqlstate=unknown, reason=driver_transaction_unsupported).');
+
+    const forged = new ProductionMigrationError('migration', new Error('synthetic'));
+    (forged as unknown as { reason: string }).reason = 'unknown\nLEAKED';
+    expect(formatProductionMigrationError(forged))
+      .toBe('Production migration failed (stage=migration, sqlstate=unknown, reason=unknown).');
   });
 
   it('reclassifies an already-tagged error at the current trusted boundary', async () => {

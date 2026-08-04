@@ -23,7 +23,7 @@ describe('production migration workflow', () => {
   });
 
   it('logs only a safe stage and SQLSTATE classification on migration failure', () => {
-    expect(runner).toContain('stage=${stage}, sqlstate=${sqlState}');
+    expect(runner).toContain('stage=${stage}, sqlstate=${sqlState}, reason=${reason}');
     expect(runner).not.toMatch(/console\.error\([^)]*(cause|url|message)/);
   });
 
