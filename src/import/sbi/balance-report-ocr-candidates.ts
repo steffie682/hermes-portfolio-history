@@ -289,6 +289,10 @@ export function mergeBalanceReportOcrCandidates(current: BalanceReportOcrCandida
   }
   return merged;
 }
+export function hasStructurallyProvenPositionCandidate(candidates: BalanceReportOcrCandidates) {
+  return candidates.domesticStockLots.length > 0 || candidates.fundBalances.length > 0 || candidates.margin.length > 0;
+}
+
 export function countBalanceReportOcrCandidates(candidates: BalanceReportOcrCandidates) {
   return CANDIDATE_KEYS.reduce((count, key) => count + candidates[key].length, 0);
 }

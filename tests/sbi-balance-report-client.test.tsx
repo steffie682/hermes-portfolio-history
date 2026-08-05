@@ -77,6 +77,16 @@ function confirmAllSectionsAsZero() {
 afterEach(() => cleanup());
 
 describe('SBI balance report client', () => {
+  it('shows that PDF bytes remain loaded after clearing the native file input', async () => {
+    render(<SbiBalanceReportClient inspectPdf={vi.fn().mockResolvedValue({ ...emptyReport, pageCount: 63 })} />);
+    const input = choose(pdfFile());
+    await screen.findByText('PDF読み込み済み（端末内・63ページ）');
+    expect(input.value).toBe('');
+    expect(screen.queryByText(/report\.pdf/)).toBeNull();
+    expect(screen.getByText(/選択欄はプライバシー保護のため空表示/)).toBeTruthy();
+    expect(screen.getByText(/別PDFの選択・OCRキャンセル・保存完了・画面離脱時に解放/)).toBeTruthy();
+  });
+
   it('labels recent unresolved evidence without presenting it as zero rows', () => {
     render(<SbiBalanceReportClient
       accounts={[{ id: '11111111-1111-4111-8111-111111111111', displayName: '合成SBI口座' }]}
@@ -576,6 +586,39 @@ describe('SBI balance report client', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('この範囲の結果は追加していません');
     expect(screen.queryByRole('progressbar', { name: '日本語OCRの進捗' })).toBeNull();
     expect(screen.queryByRole('link', { name: '診断用JSONを保存（任意）' })).toBeNull();
+  });
+
+  it('accepts a structurally proven OCR candidate when safe text has no known label', async () => {
+    const noLabelReport = {
+      ...ocrReport,
+      pages: [{
+        ...ocrReport.pages[0],
+        items: [{ kind: 'masked-text' as const, x: 1, y: 1, width: 1, height: 1 }],
+      }],
+    };
+    const candidates = {
+      deposits: [], collateral: [], domesticStockLots: [], fundBalances: [], limitReached: false,
+      margin: [{
+        securityCode: '1234', securityName: '合成建設', repaymentTermLabel: '6ヶ月期限',
+        designationLabel: '', quantity: '100', market: 'tokyo', side: 'buy', state: 'settled',
+        contractDate: '2024-06-20', contractUnitPrice: '223', currentPrice: '', fees: '', unrealizedPnl: '',
+        finalSettlementOrPlannedDate: '2024-06-27', sourcePage: '6', sourceRow: '',
+      }],
+    };
+    render(<SbiBalanceReportClient
+      accounts={[{ id: '11111111-1111-4111-8111-111111111111', displayName: '合成SBI口座' }]}
+      inspectPdf={vi.fn().mockResolvedValue({ ...emptyReport, pageCount: 10 })}
+      runOcr={vi.fn().mockResolvedValue({ report: noLabelReport, candidates })}
+    />);
+    choose(pdfFile());
+    await screen.findByRole('heading', { name: '端末内の日本語OCR' });
+    fireEvent.change(screen.getByLabelText('開始ページ'), { target: { value: '6' } });
+    fireEvent.change(screen.getByLabelText('終了ページ'), { target: { value: '6' } });
+    fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
+    await screen.findByText('端末内OCRの入力候補：1件');
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '候補をフォームに反映' }));
+    await screen.findByRole('heading', { name: '取引残高報告書を本人確認して保存' });
   });
 
   it('keeps diagnostics but gates saving when extracted labels are not the exact report label', async () => {

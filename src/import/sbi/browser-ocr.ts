@@ -1,5 +1,5 @@
 import { applySbiPiiMaskPlan, createSbiLocalPiiMaskPlan } from './local-pii-mask';
-import { extractBalanceReportOcrCandidates, emptyBalanceReportOcrCandidates, mergeBalanceReportOcrCandidates, type BalanceReportOcrCandidates, type OcrCandidateBlock } from './balance-report-ocr-candidates';
+import { extractBalanceReportOcrCandidates, emptyBalanceReportOcrCandidates, hasStructurallyProvenPositionCandidate, mergeBalanceReportOcrCandidates, type BalanceReportOcrCandidates, type OcrCandidateBlock } from './balance-report-ocr-candidates';
 const MAX_SOURCE_PAGES = 100;
 export const MAX_OCR_PAGES = 5;
 const OCR_SCALE = 2.5;
@@ -465,7 +465,9 @@ export async function runSbiBrowserOcr(
       page = null;
       onProgress(pageNumber - range.startPage + 1, total);
     }
-    const report = safeReport.finish();
+    const report = safeReport.finish({
+      allowNoKnownLabel: hasStructurallyProvenPositionCandidate(candidates),
+    });
     completed = true;
     return { report, candidates };
   } catch (error) {

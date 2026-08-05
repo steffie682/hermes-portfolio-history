@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import Link from 'next/link';
 import { buildSbiBalanceReportSafeReport } from '@/import/sbi/balance-report-safe-report';
 import { runSbiBrowserOcr, validateOcrPageRange, type SbiBrowserOcrResult } from '@/import/sbi/browser-ocr';
-import { countBalanceReportOcrCandidates, emptyBalanceReportOcrCandidates, mergeBalanceReportOcrCandidates, type BalanceReportOcrCandidates } from '@/import/sbi/balance-report-ocr-candidates';
+import { countBalanceReportOcrCandidates, emptyBalanceReportOcrCandidates, hasStructurallyProvenPositionCandidate, mergeBalanceReportOcrCandidates, type BalanceReportOcrCandidates } from '@/import/sbi/balance-report-ocr-candidates';
 import { extractPdfStructure, type PdfDocumentLoader } from '@/import/sbi/pdf-structure-extractor';
 import BalanceReportPositionForm, {
   type BalanceReportAccountSummary,
@@ -150,7 +150,7 @@ export default function SbiBalanceReportClient({
         setStartPage(1);
         setEndPage(defaultEnd);
         setOcrPageCount(nextReport.pageCount);
-        setStatus(`自動抽出できませんでした。PDF ${nextReport.pageCount}ページ`);
+        setStatus(`PDFを端末内に読み込みました（${nextReport.pageCount}ページ）。自動抽出できないため日本語OCRを使用します`);
       } else {
         setReport(nextReport);
         setFormReady(true);
@@ -209,7 +209,9 @@ export default function SbiBalanceReportClient({
       const nextCandidates = 'report' in output ? output.candidates : emptyBalanceReportOcrCandidates();
       const hasKnownLabel = nextReport.pages.some((page) =>
         page.items.some((item) => item.kind === 'known-label'));
-      if (!hasKnownLabel) throw new Error('ocr-known-label-required');
+      if (!hasKnownLabel && !hasStructurallyProvenPositionCandidate(nextCandidates)) {
+        throw new Error('ocr-known-label-required');
+      }
       setReport((current) => {
         if (!current) return nextReport;
         const byPage = new Map(current.pages.map((page) => [page.pageNumber, page]));
@@ -254,7 +256,8 @@ export default function SbiBalanceReportClient({
     ? [...new Set(report.pages.flatMap((page) => page.items.flatMap((item) => item.labels ?? [])))]
     : [];
   const reportJson = report ? JSON.stringify(report, null, 2) : '';
-  const isBalanceReport = labels.includes('取引残高報告書');
+  const hasProvenPositionCandidate = hasStructurallyProvenPositionCandidate(ocrCandidates);
+  const isBalanceReport = labels.includes('取引残高報告書') || hasProvenPositionCandidate;
   const reportHref = report
     ? `data:application/json;charset=utf-8,${encodeURIComponent(reportJson)}`
     : '';
@@ -286,6 +289,12 @@ export default function SbiBalanceReportClient({
       <div className="import-file-panel">
         <label htmlFor="sbi-balance-report-pdf">SBI取引残高報告書PDF</label>
         <input id="sbi-balance-report-pdf" type="file" accept=".pdf,application/pdf" disabled={formReady} onChange={handleFileChange} />
+        {ocrPageCount !== null ? (
+          <div className="import-file-loaded">
+            <strong>PDF読み込み済み（端末内・{ocrPageCount}ページ）</strong>
+            <p>ブラウザの選択欄はプライバシー保護のため空表示に戻しています。PDF本体は追加範囲のOCRと確認作業のため端末内だけで保持し、別PDFの選択・OCRキャンセル・保存完了・画面離脱時に解放します。</p>
+          </div>
+        ) : null}
         <strong>PDFは外部へ送信されません</strong>
         <p>このブラウザー内で見出しと表の配置だけを確認し、氏名・口座番号・銘柄・金額はJSONへ残しません。</p>
         <p>処理中の一時的な値は参照を外し、ガベージコレクションの対象として解放します。</p>
@@ -360,6 +369,8 @@ export default function SbiBalanceReportClient({
           <p>検出できた既知の見出し</p>
           {labels.length > 0 ? (
             <ul>{labels.map((label) => <li key={label}>{label}</li>)}</ul>
+          ) : hasProvenPositionCandidate ? (
+            <p>見出し文字列は検出できませんでしたが、厳格な表構造を満たす未確認候補を検出しました。</p>
           ) : (
             <p>既知の見出しを検出できませんでした。</p>
           )}

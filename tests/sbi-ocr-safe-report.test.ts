@@ -53,6 +53,15 @@ describe('SBI OCR safe report conversion', () => {
     }])).toThrow('ocr-known-label-required');
   });
 
+  it('allows a no-label safe report only when the caller supplies independent structural proof', () => {
+    const builder = createSbiOcrSafeReportBuilder();
+    const page = { pageNumber: 1, width: 600, height: 800, text: 'PRIVATE-NAME-CANARY\t123456' };
+    builder.addPage(page);
+    const report = builder.finish({ allowNoKnownLabel: true });
+    expect(report.pages[0].items.every((item) => item.kind !== 'known-label')).toBe(true);
+    expect(JSON.stringify(report)).not.toContain('PRIVATE-NAME-CANARY');
+  });
+
   it('classifies and clears each page immediately while allowing one selected page without a label', () => {
     const builder = createSbiOcrSafeReportBuilder();
     const unknown = {

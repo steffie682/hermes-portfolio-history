@@ -73,10 +73,10 @@ export function createSbiOcrSafeReportBuilder() {
       safePages.push(safePage);
       structurePage.items.length = 0;
     },
-    finish() {
+    finish(options: { allowNoKnownLabel?: boolean } = {}) {
       const hasKnownLabel = safePages.some((page) =>
         page.items.some((item) => item.kind === 'known-label'));
-      if (!hasKnownLabel) throw new Error('ocr-known-label-required');
+      if (!hasKnownLabel && options.allowNoKnownLabel !== true) throw new Error('ocr-known-label-required');
       return {
         schemaVersion: 1 as const,
         documentKind: 'sbi-balance-report-structure' as const,

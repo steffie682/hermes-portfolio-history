@@ -372,6 +372,64 @@ describe('SBI browser OCR resources', () => {
     expect(canvas.height).toBe(0);
   });
 
+  it('returns strict structured candidates even when safe OCR text has no known label', async () => {
+    const candidateLine = (y: number, entries: Array<[string, number]>) => ({
+      text: entries.map(([text]) => text).join(' '), confidence: 95,
+      bbox: { x0: 0, y0: y, x1: 1_000, y1: y + 15 },
+      words: entries.map(([text, x]) => ({ text, confidence: 95, bbox: { x0: x, y0: y, x1: x + 60, y1: y + 15 } })),
+    });
+    const recognition = { data: {
+      text: 'PRIVATE OCR TEXT WITHOUT ALLOWLISTED LABEL',
+      blocks: [{ paragraphs: [{ lines: [
+        candidateLine(70, [['信用取引の建玉残高', 40]]),
+        candidateLine(90, [['銘柄名(弁済期限)', 20], ['指定', 260], ['数量・市場', 330], ['区分', 440],
+          ['約定年月日', 520], ['約定単価', 630], ['時価', 720], ['手数料', 790],
+          ['評価損益', 850], ['最終決済期日', 910]]),
+        candidateLine(120, [['合成建設[1234]6ヶ月', 20], ['-', 260], ['100株東京', 330], ['買未決済', 440],
+          ['2024/01/15', 520], ['1,000円', 630], ['900円', 720], ['-', 790],
+          ['-10,000円', 850], ['2024/07/15', 910]]),
+      ] }] }],
+    } };
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const canvas = document.createElement('canvas');
+    canvas.getContext = vi.fn().mockReturnValue({});
+    const dependencies: BrowserOcrDependencies = {
+      loadPdfJs: vi.fn().mockResolvedValue({
+        GlobalWorkerOptions: { workerSrc: `${location.origin}/pdf.worker.min.mjs` },
+        getDocument: vi.fn().mockReturnValue({
+          promise: Promise.resolve({
+            numPages: 1,
+            getPage: vi.fn().mockResolvedValue({
+              getViewport: vi.fn(({ scale }: { scale: number }) => ({ width: 400 * scale, height: 560 * scale })),
+              render: vi.fn().mockReturnValue({ promise: Promise.resolve(), cancel: vi.fn() }),
+              cleanup: vi.fn(),
+            }),
+          }),
+          destroy,
+        }),
+      }),
+      loadTesseract: vi.fn().mockResolvedValue({
+        createWorker: vi.fn().mockResolvedValue({ recognize: vi.fn().mockResolvedValue(recognition), terminate }),
+        OEM: { LSTM_ONLY: 1 },
+      }),
+      createWorkerController: createMockWorkerController,
+      createCanvas: () => canvas,
+    };
+
+    const output = await runSbiBrowserOcr(
+      new Uint8Array([37, 80, 68, 70, 45]),
+      { startPage: 1, endPage: 1 },
+      new AbortController().signal,
+      vi.fn(),
+      dependencies,
+    );
+
+    expect(output.candidates.margin).toHaveLength(1);
+    expect(output.report.pages[0].items.every((item) => item.kind !== 'known-label')).toBe(true);
+    expect(JSON.stringify(output.report)).not.toContain('PRIVATE OCR TEXT');
+  });
+
   it('cancels and destroys each active resource once on abort', async () => {
     const controller = new AbortController();
     const destroy = vi.fn().mockResolvedValue(undefined);
