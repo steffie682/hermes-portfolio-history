@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import Link from 'next/link';
 import { buildSbiBalanceReportSafeReport } from '@/import/sbi/balance-report-safe-report';
-import { runSbiBrowserOcr, validateOcrPageRange, type SbiBrowserOcrResult } from '@/import/sbi/browser-ocr';
-import { countBalanceReportOcrCandidates, emptyBalanceReportOcrCandidates, hasStructurallyProvenPositionCandidate, mergeBalanceReportOcrCandidates, type BalanceReportOcrCandidates } from '@/import/sbi/balance-report-ocr-candidates';
+import { runSbiBrowserOcr, SbiBrowserOcrDiagnosticError, validateOcrPageRange, type SbiBrowserOcrResult } from '@/import/sbi/browser-ocr';
+import { countBalanceReportOcrCandidates, emptyBalanceReportOcrCandidates, hasStructurallyProvenPositionCandidate, mergeBalanceReportOcrCandidates, type BalanceReportOcrCandidates, type BalanceReportOcrDiagnostics } from '@/import/sbi/balance-report-ocr-candidates';
 import { extractPdfStructure, type PdfDocumentLoader } from '@/import/sbi/pdf-structure-extractor';
 import BalanceReportPositionForm, {
   type BalanceReportAccountSummary,
@@ -37,6 +37,15 @@ function hasPdfMagic(source: Uint8Array): boolean {
     && source[2] === 0x44
     && source[3] === 0x46
     && source[4] === 0x2d;
+}
+
+function mergeOcrDiagnostics(
+  current: BalanceReportOcrDiagnostics | null,
+  next: BalanceReportOcrDiagnostics,
+): BalanceReportOcrDiagnostics {
+  const byPage = new Map((current?.pages ?? []).map((page) => [page.pageNumber, page]));
+  for (const page of next.pages) byPage.set(page.pageNumber, page);
+  return { pages: [...byPage.values()].sort((left, right) => left.pageNumber - right.pageNumber) };
 }
 
 function releaseBytes(source: Uint8Array | null) {
@@ -74,6 +83,7 @@ export default function SbiBalanceReportClient({
   const [reportGeneration, setReportGeneration] = useState(0);
   const [formReady, setFormReady] = useState(false);
   const [ocrCandidates, setOcrCandidates] = useState<BalanceReportOcrCandidates>(() => emptyBalanceReportOcrCandidates());
+  const [ocrDiagnostics, setOcrDiagnostics] = useState<BalanceReportOcrDiagnostics | null>(null);
   const [ocrPageCount, setOcrPageCount] = useState<number | null>(null);
   const [startPage, setStartPage] = useState(1);
   const [endPage, setEndPage] = useState(1);
@@ -104,6 +114,7 @@ export default function SbiBalanceReportClient({
     setReport(null);
     setFormReady(false);
     setOcrCandidates(emptyBalanceReportOcrCandidates());
+    setOcrDiagnostics(null);
     setPdfPageCount(null);
     setOcrPageCount(null);
     setOcrRunning(false);
@@ -207,6 +218,9 @@ export default function SbiBalanceReportClient({
       if (version !== operationVersion.current || controller.signal.aborted) return;
       const nextReport = 'report' in output ? output.report : output;
       const nextCandidates = 'report' in output ? output.candidates : emptyBalanceReportOcrCandidates();
+      if ('report' in output && output.diagnostics) {
+        setOcrDiagnostics((current) => mergeOcrDiagnostics(current, output.diagnostics));
+      }
       const hasKnownLabel = nextReport.pages.some((page) =>
         page.items.some((item) => item.kind === 'known-label'));
       if (!hasKnownLabel && !hasStructurallyProvenPositionCandidate(nextCandidates)) {
@@ -225,6 +239,9 @@ export default function SbiBalanceReportClient({
       if (version !== operationVersion.current || controller.signal.aborted) return;
       setStatus('');
       setOcrProgress({ completed: 0, total: 0 });
+      if (ocrError instanceof SbiBrowserOcrDiagnosticError) {
+        setOcrDiagnostics((current) => mergeOcrDiagnostics(current, ocrError.diagnostics));
+      }
       setError(ocrError instanceof Error && ocrError.message === 'ocr-known-label-required'
         ? 'OCR結果に既知の見出しがありません。この範囲の結果は追加していません。ページ範囲またはPDFを確認してください。'
         : '日本語OCRを完了できませんでした。この範囲の結果は追加していません。ページ範囲またはPDFを確認してください。');
@@ -244,6 +261,7 @@ export default function SbiBalanceReportClient({
     setReport(null);
     setFormReady(false);
     setOcrCandidates(emptyBalanceReportOcrCandidates());
+    setOcrDiagnostics(null);
     setPdfPageCount(null);
     setOcrPageCount(null);
     setOcrRunning(false);
@@ -301,6 +319,14 @@ export default function SbiBalanceReportClient({
       </div>
       {status ? <p className="import-live-status" role="status">{status}</p> : null}
       {error ? <div className="import-error" role="alert">{error}</div> : null}
+      {ocrDiagnostics && ocrDiagnostics.pages.length > 0 ? (
+        <section className="safe-report-result" aria-labelledby="ocr-structure-diagnostics-title">
+          <h2 id="ocr-structure-diagnostics-title">OCR構造診断（金融値を含みません）</h2>
+          <ul>{ocrDiagnostics.pages.map((page) => (
+            <li key={page.pageNumber}>{page.pageNumber}ページ：信頼line {page.trustedLineCount}、exact section {page.marginSectionMarkerCount}、header {page.marginHeaderCount}、対象row line {page.eligibleMarginLineCount}、candidate {page.marginCandidateCount}</li>
+          ))}</ul>
+        </section>
+      ) : null}
       {ocrPageCount !== null ? (
         <section className="import-file-panel" aria-labelledby="sbi-ocr-title">
           <h2 id="sbi-ocr-title">端末内の日本語OCR</h2>

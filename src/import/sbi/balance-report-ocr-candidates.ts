@@ -265,6 +265,57 @@ function localId(page: OcrCandidatePage, section: CandidateSection, start: Secti
 function exactIdentity(row: Record<string, string>) {
   return Object.keys(row).filter((key) => key !== '_localId').sort().map((key) => `${key}=${row[key]}`).join('\u001f');
 }
+export interface BalanceReportOcrDiagnostics {
+  pages: Array<{
+    pageNumber: number;
+    trustedLineCount: number;
+    marginSectionMarkerCount: number;
+    marginHeaderCount: number;
+    eligibleMarginLineCount: number;
+    marginCandidateCount: number;
+  }>;
+}
+
+export function diagnoseBalanceReportOcrCandidates(
+  pages: OcrCandidatePage[],
+  candidates: BalanceReportOcrCandidates,
+): BalanceReportOcrDiagnostics {
+  return { pages: pages.map((page) => {
+    const trusted = trustedLines(page);
+    let section: CandidateSection | null = null;
+    let columnsReady = false;
+    let marginSectionMarkerCount = 0;
+    let marginHeaderCount = 0;
+    let eligibleMarginLineCount = 0;
+    for (const line of trusted) {
+      if (line.tainted) { section = null; columnsReady = false; continue; }
+      const marker = sectionMarker(line.text);
+      if (marker !== null) {
+        section = marker === 'other' ? null : marker;
+        columnsReady = false;
+        if (marker === 'margin') marginSectionMarkerCount += 1;
+        continue;
+      }
+      if (section && isColumnHeader(line.text, section, line.words, page.width)) {
+        columnsReady = true;
+        if (section === 'margin') marginHeaderCount += 1;
+        continue;
+      }
+      if (section === 'margin' && columnsReady && verticallyCoherent({ ...line, section, columnsReady }, page)) {
+        eligibleMarginLineCount += 1;
+      }
+    }
+    return {
+      pageNumber: page.pageNumber,
+      trustedLineCount: trusted.filter((line) => !line.tainted).length,
+      marginSectionMarkerCount,
+      marginHeaderCount,
+      eligibleMarginLineCount,
+      marginCandidateCount: candidates.margin.filter((row) => row.sourcePage === String(page.pageNumber)).length,
+    };
+  }) };
+}
+
 export function emptyBalanceReportOcrCandidates(): BalanceReportOcrCandidates {
   return { deposits: [], collateral: [], domesticStockLots: [], fundBalances: [], margin: [], limitReached: false };
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  diagnoseBalanceReportOcrCandidates,
   emptyBalanceReportOcrCandidates,
   extractBalanceReportOcrCandidates,
   mergeBalanceReportOcrCandidates,
@@ -349,6 +350,27 @@ describe('SBI balance-report on-device OCR candidates', () => {
       contractDate: '2024-06-20', contractUnitPrice: '223', currentPrice: '', fees: '', unrealizedPnl: '',
       finalSettlementOrPlannedDate: '2024-06-27', sourcePage: '6', sourceRow: '',
     })]);
+  });
+
+  it('reports only non-sensitive parser-stage counts for live margin OCR', () => {
+    const candidatePage = page(6, [
+      line(70, [['【信用取引の建玉残高】', 40]]),
+      line(90, [['銘柄名（弁済期限）', 20], ['コード', 265], ['数量・市場', 330], ['区分', 390],
+        ['約定年月日', 490], ['約定単価', 560], ['作成基準日現在の時価', 660], ['手数料その他経費', 760],
+        ['評価損益', 850], ['最終決済期日または決済予定日', 920]]),
+      preciseLine(120, [['合成建設（6ヶ月期限）', 20, 215], ['1234', 265, 25], ['100株', 330, 20], ['買', 390, 20],
+        ['2024.6.20', 440, 50], ['223円', 520, 50], ['2024.6.27', 900, 70]]),
+      preciseLine(136, [['特定対象', 200, 35], ['東京', 330, 20], ['決済ずみ', 390, 35]]),
+      { ...line(180, [['LOW-CONFIDENCE-CANARY', 20]]), confidence: 65 },
+    ]);
+    candidatePage.blocks![0].paragraphs[0].lines[4].words[0].confidence = 65;
+    const candidates = extractBalanceReportOcrCandidates([candidatePage]);
+    expect(diagnoseBalanceReportOcrCandidates([candidatePage], candidates)).toEqual({ pages: [{
+      pageNumber: 6, trustedLineCount: 4, marginSectionMarkerCount: 1,
+      marginHeaderCount: 1, eligibleMarginLineCount: 2, marginCandidateCount: 1,
+    }] });
+    expect(JSON.stringify(diagnoseBalanceReportOcrCandidates([candidatePage], candidates)))
+      .not.toMatch(/合成建設|1234|223|特定対象/u);
   });
 
   it('rejects an overlapping live header and a low-confidence live continuation', () => {

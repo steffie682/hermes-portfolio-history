@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { cleanup } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import SbiBalanceReportClient from '@/app/imports/sbi/balance-report/client';
+import { SbiBrowserOcrDiagnosticError } from '@/import/sbi/browser-ocr';
 
 const safeReport = {
   schemaVersion: 1 as const,
@@ -576,7 +577,10 @@ describe('SBI balance report client', () => {
   it('clears stale progress when an OCR range has no known label', async () => {
     const runOcr = vi.fn().mockImplementation(async (_bytes, _range, _signal, onProgress) => {
       onProgress(5, 5);
-      throw new Error('ocr-known-label-required');
+      throw new SbiBrowserOcrDiagnosticError('ocr-known-label-required', { pages: [{
+        pageNumber: 5, trustedLineCount: 12, marginSectionMarkerCount: 1,
+        marginHeaderCount: 0, eligibleMarginLineCount: 0, marginCandidateCount: 0,
+      }] });
     });
     render(<SbiBalanceReportClient inspectPdf={vi.fn().mockResolvedValue({ ...emptyReport, pageCount: 10 })} runOcr={runOcr} />);
     choose(pdfFile());
@@ -586,6 +590,9 @@ describe('SBI balance report client', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('この範囲の結果は追加していません');
     expect(screen.queryByRole('progressbar', { name: '日本語OCRの進捗' })).toBeNull();
     expect(screen.queryByRole('link', { name: '診断用JSONを保存（任意）' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'OCR構造診断（金融値を含みません）' })).toBeTruthy();
+    expect(screen.getByText('5ページ：信頼line 12、exact section 1、header 0、対象row line 0、candidate 0')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('PRIVATE-OCR-CANARY');
   });
 
   it('accepts a structurally proven OCR candidate when safe text has no known label', async () => {
