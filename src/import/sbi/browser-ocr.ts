@@ -1,5 +1,5 @@
 import { applySbiPiiMaskPlan, createSbiLocalPiiMaskPlan } from './local-pii-mask';
-import { extractBalanceReportOcrCandidates, emptyBalanceReportOcrCandidates, hasStructurallyProvenPositionCandidate, mergeBalanceReportOcrCandidates, type BalanceReportOcrCandidates, type OcrCandidateBlock } from './balance-report-ocr-candidates';
+import { diagnoseBalanceReportOcrCandidates, extractBalanceReportOcrCandidates, emptyBalanceReportOcrCandidates, hasStructurallyProvenPositionCandidate, mergeBalanceReportOcrCandidates, type BalanceReportOcrCandidates, type BalanceReportOcrDiagnostics, type OcrCandidateBlock } from './balance-report-ocr-candidates';
 const MAX_SOURCE_PAGES = 100;
 export const MAX_OCR_PAGES = 5;
 const OCR_SCALE = 2.5;
@@ -304,6 +304,14 @@ export async function rerunAfterLocalPiiMask(
 export interface SbiBrowserOcrResult {
   report: ReturnType<ReturnType<typeof import('./ocr-safe-report')['createSbiOcrSafeReportBuilder']>['finish']>;
   candidates: BalanceReportOcrCandidates;
+  diagnostics: BalanceReportOcrDiagnostics;
+}
+
+export class SbiBrowserOcrDiagnosticError extends Error {
+  constructor(message: string, readonly diagnostics: BalanceReportOcrDiagnostics) {
+    super(message);
+    this.name = 'SbiBrowserOcrDiagnosticError';
+  }
 }
 
 export async function runSbiBrowserOcr(
@@ -339,6 +347,7 @@ export async function runSbiBrowserOcr(
   let page: PdfPage | null = null;
   const safeReport = createSbiOcrSafeReportBuilder();
   let candidates = emptyBalanceReportOcrCandidates();
+  const diagnostics: BalanceReportOcrDiagnostics = { pages: [] };
   let renderedPixels = 0;
   let completed = false;
   const terminateWorker = () => {
@@ -443,12 +452,15 @@ export async function runSbiBrowserOcr(
       result = masked.recognition;
       try {
         signal.throwIfAborted();
-        candidates = mergeBalanceReportOcrCandidates(candidates, extractBalanceReportOcrCandidates([{
+        const candidatePage = {
           pageNumber,
           width: canvas.width,
           height: canvas.height,
           blocks: result.data.blocks ?? null,
-        }]));
+        };
+        const pageCandidates = extractBalanceReportOcrCandidates([candidatePage]);
+        candidates = mergeBalanceReportOcrCandidates(candidates, pageCandidates);
+        diagnostics.pages.push(...diagnoseBalanceReportOcrCandidates([candidatePage], pageCandidates).pages);
         safeReport.addPage({
           pageNumber,
           width: baseViewport.width,
@@ -465,11 +477,19 @@ export async function runSbiBrowserOcr(
       page = null;
       onProgress(pageNumber - range.startPage + 1, total);
     }
-    const report = safeReport.finish({
-      allowNoKnownLabel: hasStructurallyProvenPositionCandidate(candidates),
-    });
+    let report: SbiBrowserOcrResult['report'];
+    try {
+      report = safeReport.finish({
+        allowNoKnownLabel: hasStructurallyProvenPositionCandidate(candidates),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'ocr-known-label-required') {
+        throw new SbiBrowserOcrDiagnosticError(error.message, diagnostics);
+      }
+      throw error;
+    }
     completed = true;
-    return { report, candidates };
+    return { report, candidates, diagnostics };
   } catch (error) {
     if (signal.aborted) throw abortError(signal);
     throw error;

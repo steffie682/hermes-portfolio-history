@@ -426,6 +426,10 @@ describe('SBI browser OCR resources', () => {
     );
 
     expect(output.candidates.margin).toHaveLength(1);
+    expect(output.diagnostics).toEqual({ pages: [{
+      pageNumber: 1, trustedLineCount: 3, marginSectionMarkerCount: 1,
+      marginHeaderCount: 1, eligibleMarginLineCount: 1, marginCandidateCount: 1,
+    }] });
     expect(output.report.pages[0].items.every((item) => item.kind !== 'known-label')).toBe(true);
     expect(JSON.stringify(output.report)).not.toContain('PRIVATE OCR TEXT');
   });
