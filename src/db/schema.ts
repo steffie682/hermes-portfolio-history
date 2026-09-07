@@ -31,6 +31,21 @@ export const authUsers = pgTable('user', {
   deletionRequestedAt: timestamp('deletion_requested_at', { withTimezone: true }),
 });
 
+export const gardenStates = pgTable.withRLS('garden_states', {
+  ownerUserId: text('owner_user_id').primaryKey().references(() => authUsers.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  lots: jsonb('lots').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  check('garden_states_revision_check', sql`${table.revision} BETWEEN 1 AND 2147483646`),
+  check('garden_states_lots_check', sql`CASE WHEN jsonb_typeof(${table.lots}) = 'array' THEN jsonb_array_length(${table.lots}) <= 200 ELSE false END`),
+  pgPolicy('garden_states_owner_isolation', {
+    for: 'all', to: 'public',
+    using: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')`,
+    withCheck: sql`${table.ownerUserId} = nullif(current_setting('app.current_user_id', true), '')`,
+  }),
+]);
+
 export const brokerAccounts = pgTable.withRLS(
   'broker_accounts',
   {

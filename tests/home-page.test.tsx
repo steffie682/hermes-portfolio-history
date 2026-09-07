@@ -7,8 +7,9 @@ describe('HomePage', () => {
   it('states the implemented scope without presenting the whole product as complete', () => {
     render(<HomePage />);
     expect(screen.getByRole('heading', { name: '資産履歴管理' })).toBeTruthy();
-    expect(screen.getByText('SBI取込・残高証拠の確認版')).toBeTruthy();
-    expect(screen.getByText(/総資産・運用損益・配当集計はまだ未実装/)).toBeTruthy();
+    expect(screen.getByText('個別株の保有記録・SBI残高証拠')).toBeTruthy();
+    expect(screen.getByText(/口座全体の総資産・税務損益・受取済み配当の集計はまだ未実装/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: '株の庭を開く' }).getAttribute('href')).toBe('/garden');
     expect(screen.queryByText('本番環境で利用できます')).toBeNull();
     expect(metadata.description).toContain('取込基盤');
     expect(screen.getByRole('link', { name: '資産概要を見る' }).getAttribute('href'))
