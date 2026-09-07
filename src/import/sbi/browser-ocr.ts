@@ -457,6 +457,8 @@ export async function runSbiBrowserOcr(
           width: canvas.width,
           height: canvas.height,
           blocks: result.data.blocks ?? null,
+          textPresent: result.data.text.trim().length > 0,
+          maskApplied: masked.maskApplied,
         };
         const pageCandidates = extractBalanceReportOcrCandidates([candidatePage]);
         candidates = mergeBalanceReportOcrCandidates(candidates, pageCandidates);
@@ -492,6 +494,10 @@ export async function runSbiBrowserOcr(
     return { report, candidates, diagnostics };
   } catch (error) {
     if (signal.aborted) throw abortError(signal);
+    if (error instanceof Error && ['ocr-text-empty', 'ocr-text-forbidden-character',
+      'ocr-text-too-large', 'ocr-text-too-many-cells'].includes(error.message)) {
+      throw new SbiBrowserOcrDiagnosticError(error.message, diagnostics);
+    }
     throw error;
   } finally {
     signal.removeEventListener('abort', onAbort);

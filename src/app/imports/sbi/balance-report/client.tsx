@@ -321,9 +321,20 @@ export default function SbiBalanceReportClient({
       {error ? <div className="import-error" role="alert">{error}</div> : null}
       {ocrDiagnostics && ocrDiagnostics.pages.length > 0 ? (
         <section className="safe-report-result" aria-labelledby="ocr-structure-diagnostics-title">
-          <h2 id="ocr-structure-diagnostics-title">OCR構造診断（金融値を含みません）</h2>
+          <h2 id="ocr-structure-diagnostics-title">OCR構造診断 v2（金融値を含みません）</h2>
+          <p>検出行はOCRから届いた行、評価対象行は語または空白以外の文字がある行、不採用行は信頼条件を満たさない行です。理由は重複して数えます（足し合わせないでください）。</p>
           <ul>{ocrDiagnostics.pages.map((page) => (
-            <li key={page.pageNumber}>{page.pageNumber}ページ：信頼line {page.trustedLineCount}、exact section {page.marginSectionMarkerCount}、header {page.marginHeaderCount}、対象row line {page.eligibleMarginLineCount}、candidate {page.marginCandidateCount}</li>
+            <li key={page.pageNumber}>
+              <div>{page.pageNumber}ページ：信頼行 {page.trustedLineCount}、信用区分見出し {page.marginSectionMarkerCount}、列見出し {page.marginHeaderCount}、対象行 {page.eligibleMarginLineCount}、候補 {page.marginCandidateCount}</div>
+              <div>OCR文字列：{page.textPresent === true ? 'あり' : page.textPresent === false ? 'なし' : '不明'}／端末内マスク：{page.maskApplied === true ? '適用済み' : page.maskApplied === false ? '未適用' : '不明'}</div>
+              <div>検出ブロック {page.rawBlockCount}、検出行 {page.rawLineCount}、検出語 {page.rawWordCount}、評価対象行 {page.evaluatedNonemptyLineCount}、不採用行 {page.rejectedLineCount}</div>
+              {page.rawLineCount === 0 ? (
+                <div>{page.textPresent === false ? '文字列・行構造とも未検出です。' : page.textPresent === true ? '文字列はありますが、行構造は未検出です。' : '行構造は未検出です。文字列の有無は不明です。'}</div>
+              ) : page.evaluatedNonemptyLineCount > 0 && page.trustedLineCount === 0 ? (
+                <div>検出行はありますが、信頼条件で全行が不採用です。</div>
+              ) : null}
+              <div>不採用理由：行の信頼度不足・非数値 {page.rejectionReasonCounts.lineConfidence}、語の信頼度不足・非数値 {page.rejectionReasonCounts.wordConfidence}、文字・制御文字・長さ {page.rejectionReasonCounts.textControlOrLength}、行と語の不一致 {page.rejectionReasonCounts.lineWordMismatch}、座標・包含 {page.rejectionReasonCounts.geometryOrContainment}、読み順の逆転 {page.rejectionReasonCounts.reversedReadingOrder}</div>
+            </li>
           ))}</ul>
         </section>
       ) : null}

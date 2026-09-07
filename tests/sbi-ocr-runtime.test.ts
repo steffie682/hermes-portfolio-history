@@ -4,6 +4,7 @@ import {
   restoreWorkerConstructor,
   rerunAfterLocalPiiMask,
   runSbiBrowserOcr,
+  SbiBrowserOcrDiagnosticError,
   validateOcrPageRange,
   type BrowserOcrDependencies,
 } from '@/import/sbi/browser-ocr';
@@ -99,6 +100,72 @@ describe('SBI browser OCR range', () => {
 });
 
 describe('SBI browser OCR resources', () => {
+  it.each([
+    [null, '取引残高報告書', false, true],
+    ['ocr-text-empty', ' \n ', false, false],
+    ['ocr-known-label-required', 'SYNTHETIC-RUNTIME-CANARY 987654321円', true, true],
+    ['ocr-text-forbidden-character', 'SYNTHETIC-RUNTIME-CANARY\u202e', false, true],
+    ['ocr-text-too-large', '合'.repeat(2_000_001), false, true],
+    ['ocr-text-too-many-cells', '合\t'.repeat(20_001), false, true],
+  ])('propagates only local text/mask booleans through the actual runtime (%s)', async (errorCode, text, maskApplied, textPresent) => {
+    const words = [
+      ['お名前', 50, 60], ['ご住所', 50, 100], ['口座番号', 50, 140],
+      ['国内株式', 50, 300], ['銘柄名', 50, 330], ['数量', 560, 330],
+      ['取得価格', 690, 330], ['買付金額', 860, 330],
+    ].map(([label, x, y]) => ({ text: String(label), confidence: 95,
+      bbox: { x0: Number(x), y0: Number(y), x1: Number(x) + 100, y1: Number(y) + 20 } }));
+    const first = { data: { text: 'SYNTHETIC-FIRST-PASS-CANARY', blocks: [{ paragraphs: [{ lines: [{
+      text: words.map((word) => word.text).join(' '), confidence: 95,
+      bbox: { x0: 0, y0: 50, x1: 1_000, y1: 360 }, words,
+    }] }] }] } };
+    const final = { data: { text, blocks: [{ paragraphs: [{ lines: [{
+      text: '合成診断ヘッダー\n', confidence: 20, bbox: { x0: 0, y0: 400, x1: 1_000, y1: 415 },
+      words: [{ text: '合成診断ヘッダー', confidence: 30, bbox: { x0: 50, y0: 400, x1: 150, y1: 415 } }],
+    }] }] }] } };
+    const recognize = vi.fn();
+    if (maskApplied) recognize.mockResolvedValueOnce(first);
+    recognize.mockResolvedValueOnce(final);
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    const cleanup = vi.fn();
+    const fillRect = vi.fn();
+    const canvas = document.createElement('canvas');
+    canvas.getContext = vi.fn().mockReturnValue({ fillStyle: '', fillRect });
+    const dependencies: BrowserOcrDependencies = {
+      loadPdfJs: vi.fn().mockResolvedValue({
+        GlobalWorkerOptions: { workerSrc: `${location.origin}/pdf.worker.min.mjs` },
+        getDocument: vi.fn().mockReturnValue({ destroy, promise: Promise.resolve({ numPages: 1,
+          getPage: vi.fn().mockResolvedValue({
+            getViewport: ({ scale }: { scale: number }) => ({ width: 400 * scale, height: 560 * scale }),
+            render: vi.fn().mockReturnValue({ promise: Promise.resolve(), cancel: vi.fn() }), cleanup,
+          }),
+        }) }),
+      }),
+      loadTesseract: vi.fn().mockResolvedValue({ createWorker: vi.fn().mockResolvedValue({ recognize, terminate }), OEM: { LSTM_ONLY: 1 } }),
+      createWorkerController: createMockWorkerController,
+      createCanvas: () => canvas,
+    };
+    const result = await runSbiBrowserOcr(new Uint8Array([37, 80, 68, 70, 45]),
+      { startPage: 1, endPage: 1 }, new AbortController().signal, vi.fn(), dependencies)
+      .catch((error: unknown) => { expect(error).toBeInstanceOf(SbiBrowserOcrDiagnosticError); return error as SbiBrowserOcrDiagnosticError; });
+    if (errorCode) expect(result).toMatchObject({ message: errorCode });
+    else expect(result).toHaveProperty('report');
+    expect(result.diagnostics?.pages[0]).toMatchObject({ textPresent, maskApplied,
+      rawBlockCount: 1, rawLineCount: 1, rawWordCount: 1, evaluatedNonemptyLineCount: 1,
+      trustedLineCount: 0, rejectedLineCount: 1, rejectionReasonCounts: { lineConfidence: 1, wordConfidence: 1 },
+    });
+    expect(JSON.stringify(result.diagnostics)).not.toMatch(/SYNTHETIC|987654321|合成診断/u);
+    expect(final.data).toEqual({ text: '', blocks: null });
+    if (maskApplied) expect(first.data).toEqual({ text: '', blocks: null });
+    expect(fillRect).toHaveBeenCalledTimes(maskApplied ? 1 : 0);
+    expect(recognize).toHaveBeenCalledTimes(maskApplied ? 2 : 1);
+    expect(terminate).toHaveBeenCalledOnce();
+    expect(destroy).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(canvas.width).toBe(0);
+    expect(canvas.height).toBe(0);
+  });
+
   it('fails closed when a temporary Worker property cannot be removed', () => {
     class OriginalWorker {}
     class TemporaryWorker {}
@@ -429,6 +496,11 @@ describe('SBI browser OCR resources', () => {
     expect(output.diagnostics).toEqual({ pages: [{
       pageNumber: 1, trustedLineCount: 3, marginSectionMarkerCount: 1,
       marginHeaderCount: 1, eligibleMarginLineCount: 1, marginCandidateCount: 1,
+      textPresent: true, maskApplied: false,
+      rawBlockCount: 1, rawLineCount: 3, rawWordCount: 21, evaluatedNonemptyLineCount: 3, rejectedLineCount: 0,
+      rejectionReasonCountsOverlap: true,
+      rejectionReasonCounts: { lineConfidence: 0, wordConfidence: 0, textControlOrLength: 0,
+        lineWordMismatch: 0, geometryOrContainment: 0, reversedReadingOrder: 0 },
     }] });
     expect(output.report.pages[0].items.every((item) => item.kind !== 'known-label')).toBe(true);
     expect(JSON.stringify(output.report)).not.toContain('PRIVATE OCR TEXT');

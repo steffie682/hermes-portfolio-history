@@ -24,6 +24,92 @@ function page(pageNumber: number, lines: ReturnType<typeof line>[]): OcrCandidat
 }
 
 describe('SBI balance-report on-device OCR candidates', () => {
+  it('keeps optional local metadata unknown for older inputs and preserves explicit booleans', () => {
+    const inputs = [page(1, []), { ...page(2, []), textPresent: false, maskApplied: false },
+      { ...page(3, []), textPresent: true, maskApplied: true }];
+    const results = diagnoseBalanceReportOcrCandidates(inputs, emptyBalanceReportOcrCandidates()).pages;
+    expect(results.map(({ textPresent, maskApplied }) => ({ textPresent, maskApplied }))).toEqual([
+      { textPresent: null, maskApplied: null }, { textPresent: false, maskApplied: false },
+      { textPresent: true, maskApplied: true },
+    ]);
+  });
+
+  it('distinguishes empty OCR structure from a received low-confidence rejected line', () => {
+    const low = line(70, [['合成診断ヘッダー', 100]]);
+    low.confidence = 20;
+    low.words[0].confidence = 30;
+    const inputs = [{ ...page(1, []), blocks: null }, page(2, [line(10, []), low])];
+    const diagnostics = diagnoseBalanceReportOcrCandidates(inputs, emptyBalanceReportOcrCandidates());
+    expect(diagnostics.pages[0]).toMatchObject({
+      rawBlockCount: 0, rawLineCount: 0, rawWordCount: 0, evaluatedNonemptyLineCount: 0,
+      trustedLineCount: 0, rejectedLineCount: 0,
+      rejectionReasonCounts: { lineConfidence: 0, wordConfidence: 0 },
+      rejectionReasonCountsOverlap: true,
+    });
+    expect(diagnostics.pages[1]).toMatchObject({
+      rawBlockCount: 1, rawLineCount: 2, rawWordCount: 1, evaluatedNonemptyLineCount: 1,
+      trustedLineCount: 0, rejectedLineCount: 1,
+      rejectionReasonCounts: { lineConfidence: 1, wordConfidence: 1 },
+      rejectionReasonCountsOverlap: true,
+    });
+  });
+
+  it.each([
+    ['line confidence nonfinite', 'lineConfidence', (entry: ReturnType<typeof line>) => { entry.confidence = Number.NaN; }],
+    ['word confidence nonfinite', 'wordConfidence', (entry: ReturnType<typeof line>) => { entry.words[0].confidence = Number.POSITIVE_INFINITY; }],
+    ['line control', 'textControlOrLength', (entry: ReturnType<typeof line>) => { entry.text += '\u202e'; }],
+    ['word control', 'textControlOrLength', (entry: ReturnType<typeof line>) => { entry.words[0].text += '\n'; }],
+    ['original line length', 'textControlOrLength', (entry: ReturnType<typeof line>) => { entry.text = ' '.repeat(501); }],
+    ['word length', 'textControlOrLength', (entry: ReturnType<typeof line>) => { entry.words[0].text = '合'.repeat(101); entry.text = entry.words[0].text; }],
+    ['empty word', 'textControlOrLength', (entry: ReturnType<typeof line>) => { entry.words[0].text = ''; entry.text = ''; }],
+    ['mismatch', 'lineWordMismatch', (entry: ReturnType<typeof line>) => { entry.text = '別の合成ヘッダー'; }],
+    ['line geometry', 'geometryOrContainment', (entry: ReturnType<typeof line>) => { entry.bbox.x1 = 1_001; }],
+    ['word geometry', 'geometryOrContainment', (entry: ReturnType<typeof line>) => { entry.words[0].bbox.x0 = Number.NaN; }],
+    ['containment', 'geometryOrContainment', (entry: ReturnType<typeof line>) => { entry.words[0].bbox.y1 += 2; }],
+  ])('counts %s per rejected line without mutating evidence', (_label, reason, invalidate) => {
+    const entry = line(70, [['合成診断ヘッダー', 100]]);
+    invalidate(entry);
+    const input = page(1, [entry]);
+    const before = structuredClone(input);
+    const result = diagnoseBalanceReportOcrCandidates([input], emptyBalanceReportOcrCandidates()).pages[0];
+    expect(result.rejectionReasonCounts).toHaveProperty(reason, 1);
+    expect(result).toMatchObject({ evaluatedNonemptyLineCount: 1, rejectedLineCount: 1, trustedLineCount: 0 });
+    expect(extractBalanceReportOcrCandidates([input])).toEqual(emptyBalanceReportOcrCandidates());
+    expect(input).toEqual(before);
+  });
+
+  it('counts overlapping reasons and keeps previousY from rejected lines and across paragraphs', () => {
+    const high = line(200, [['合成診断ヘッダー', 100]]);
+    high.confidence = 0;
+    const invalidY = line(Number.NaN, [['合成診断ヘッダー', 100]]);
+    const reversed = line(100, [['合成診断ヘッダー', 100]]);
+    reversed.words[0].confidence = 0;
+    const near = line(199, [['合成診断ヘッダー', 100]]);
+    const input = page(1, [high, invalidY]);
+    input.blocks!.push({ paragraphs: [{ lines: [reversed, near] }] });
+    const result = diagnoseBalanceReportOcrCandidates([input], emptyBalanceReportOcrCandidates()).pages[0];
+    expect(result).toMatchObject({ rawBlockCount: 2, rawLineCount: 4, rawWordCount: 4,
+      evaluatedNonemptyLineCount: 4, rejectedLineCount: 3, trustedLineCount: 1,
+      rejectionReasonCountsOverlap: true,
+      rejectionReasonCounts: { lineConfidence: 1, wordConfidence: 1, textControlOrLength: 0,
+        lineWordMismatch: 0, geometryOrContainment: 1, reversedReadingOrder: 2 },
+    });
+  });
+
+  it('serializes only diagnostic counts and booleans, never synthetic source canaries or values', () => {
+    const input = page(1, [line(70, [['SYNTHETIC-DIAGNOSTIC-CANARY', 100], ['987654321円', 300]])]);
+    const candidates = emptyBalanceReportOcrCandidates();
+    candidates.margin.push({ sourcePage: '1', securityName: 'SYNTHETIC-CANDIDATE-CANARY', quantity: '987654321' });
+    const before = structuredClone({ input, candidates });
+    const diagnostic = diagnoseBalanceReportOcrCandidates([input], candidates);
+    const serialized = JSON.stringify(diagnostic);
+    for (const secret of ['SYNTHETIC-DIAGNOSTIC-CANARY', 'SYNTHETIC-CANDIDATE-CANARY', '987654321']) {
+      expect(serialized).not.toContain(secret);
+    }
+    expect({ input, candidates }).toEqual(before);
+    expect(diagnostic.pages[0].marginCandidateCount).toBe(1);
+  });
+
   it('accepts the single trailing LF emitted by Tesseract without mutating OCR evidence', () => {
     const lines = [
       line(70, [['国内株式', 100]]),
@@ -422,7 +508,12 @@ describe('SBI balance-report on-device OCR candidates', () => {
     const candidates = extractBalanceReportOcrCandidates([candidatePage]);
     expect(diagnoseBalanceReportOcrCandidates([candidatePage], candidates)).toEqual({ pages: [{
       pageNumber: 6, trustedLineCount: 4, marginSectionMarkerCount: 1,
+      textPresent: null, maskApplied: null,
       marginHeaderCount: 1, eligibleMarginLineCount: 2, marginCandidateCount: 1,
+      rawBlockCount: 1, rawLineCount: 5, rawWordCount: 22, evaluatedNonemptyLineCount: 5, rejectedLineCount: 1,
+      rejectionReasonCountsOverlap: true,
+      rejectionReasonCounts: { lineConfidence: 1, wordConfidence: 1, textControlOrLength: 0,
+        lineWordMismatch: 0, geometryOrContainment: 0, reversedReadingOrder: 0 },
     }] });
     expect(JSON.stringify(diagnoseBalanceReportOcrCandidates([candidatePage], candidates)))
       .not.toMatch(/合成建設|1234|223|特定対象/u);

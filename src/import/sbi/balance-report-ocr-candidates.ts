@@ -5,14 +5,21 @@ type Box = { x0: number; y0: number; x1: number; y1: number };
 export type OcrCandidateWord = { text: string; confidence: number; bbox: Box };
 export type OcrCandidateLine = { text: string; confidence: number; bbox: Box; words: OcrCandidateWord[] };
 export type OcrCandidateBlock = { paragraphs: Array<{ lines: OcrCandidateLine[] }> };
-export type OcrCandidatePage = { pageNumber: number; width: number; height: number; blocks: OcrCandidateBlock[] | null };
+export type OcrCandidatePage = {
+  pageNumber: number; width: number; height: number; blocks: OcrCandidateBlock[] | null;
+  textPresent?: boolean; maskApplied?: boolean;
+};
 export type BalanceReportOcrCandidates = {
   deposits: Record<string, string>[]; collateral: Record<string, string>[];
   domesticStockLots: Record<string, string>[]; fundBalances: Record<string, string>[];
   margin: Record<string, string>[]; limitReached: boolean;
 };
 type CandidateSection = 'domestic' | 'fund' | 'margin';
-type TrustedLine = { line: OcrCandidateLine; words: OcrCandidateWord[]; text: string; tainted: boolean };
+type RejectionReasons = {
+  lineConfidence: boolean; wordConfidence: boolean; textControlOrLength: boolean;
+  lineWordMismatch: boolean; geometryOrContainment: boolean; reversedReadingOrder: boolean;
+};
+type TrustedLine = { line: OcrCandidateLine; words: OcrCandidateWord[]; text: string; tainted: boolean; reasons: RejectionReasons };
 type SectionLine = TrustedLine & { section: CandidateSection | null; columnsReady: boolean };
 const CANDIDATE_KEYS = ['deposits', 'collateral', 'domesticStockLots', 'fundBalances', 'margin'] as const;
 function ascii(value: string) { return value.normalize('NFKC').replace(/[−―‐]/g, '-'); }
@@ -62,23 +69,31 @@ function trustedLines(page: OcrCandidatePage): TrustedLine[] {
       const lineText = line.text.endsWith('\n') ? line.text.slice(0, -1) : line.text;
       const aggregateText = compact(lineText);
       const wordText = compact(line.words.map((word) => word.text).join(''));
-      const lineTrusted = Number.isFinite(line.confidence) && line.confidence >= MIN_WORD_CONFIDENCE
-        && validBox(line.bbox, page.width, page.height) && !FORBIDDEN.test(lineText) && line.text.length <= 500
-        && aggregateText === wordText;
-      const words = line.words.filter((word) => Number.isFinite(word.confidence)
-        && word.confidence >= MIN_WORD_CONFIDENCE && validBox(word.bbox, page.width, page.height)
-        && boxContainedBy(word.bbox, line.bbox) && validText(word.text, 100));
-      const tainted = !lineTrusted || line.words.some((word) => !Number.isFinite(word.confidence)
-        || word.confidence < MIN_WORD_CONFIDENCE || !validBox(word.bbox, page.width, page.height)
-        || !boxContainedBy(word.bbox, line.bbox) || !validText(word.text, 100));
-      return { line, words, text: compact(words.map((word) => word.text).join('')), tainted };
+      const lineConfidence = !Number.isFinite(line.confidence) || line.confidence < MIN_WORD_CONFIDENCE;
+      const wordChecks = line.words.map((word) => ({ word,
+        confidence: !Number.isFinite(word.confidence) || word.confidence < MIN_WORD_CONFIDENCE,
+        geometry: !validBox(word.bbox, page.width, page.height) || !boxContainedBy(word.bbox, line.bbox),
+        text: !validText(word.text, 100),
+      }));
+      // These same checks control acceptance and diagnostics; no parallel validator.
+      const reasons: RejectionReasons = {
+        lineConfidence,
+        wordConfidence: wordChecks.some((check) => check.confidence),
+        textControlOrLength: FORBIDDEN.test(lineText) || line.text.length > 500 || wordChecks.some((check) => check.text),
+        lineWordMismatch: aggregateText !== wordText,
+        geometryOrContainment: !validBox(line.bbox, page.width, page.height) || wordChecks.some((check) => check.geometry),
+        reversedReadingOrder: false,
+      };
+      const words = wordChecks.filter((check) => !check.confidence && !check.geometry && !check.text).map(({ word }) => word);
+      const tainted = Object.values(reasons).some(Boolean);
+      return { line, words, text: compact(words.map((word) => word.text).join('')), tainted, reasons };
     });
   let previousY = Number.NEGATIVE_INFINITY;
   return mapped.map((entry) => {
     const y = entry.line.bbox.y0;
     const reversed = !Number.isFinite(y) || y + 1 < previousY;
     if (Number.isFinite(y)) previousY = Math.max(previousY, y);
-    return { ...entry, tainted: entry.tainted || reversed };
+    return { ...entry, tainted: entry.tainted || reversed, reasons: { ...entry.reasons, reversedReadingOrder: reversed } };
   });
 }
 function sectionMarker(text: string): CandidateSection | 'other' | null {
@@ -271,6 +286,15 @@ function exactIdentity(row: Record<string, string>) {
 export interface BalanceReportOcrDiagnostics {
   pages: Array<{
     pageNumber: number;
+    textPresent: boolean | null;
+    maskApplied: boolean | null;
+    rawBlockCount: number;
+    rawLineCount: number;
+    rawWordCount: number;
+    evaluatedNonemptyLineCount: number;
+    rejectedLineCount: number;
+    rejectionReasonCounts: { [K in keyof RejectionReasons]: number };
+    rejectionReasonCountsOverlap: true;
     trustedLineCount: number;
     marginSectionMarkerCount: number;
     marginHeaderCount: number;
@@ -285,6 +309,7 @@ export function diagnoseBalanceReportOcrCandidates(
 ): BalanceReportOcrDiagnostics {
   return { pages: pages.map((page) => {
     const trusted = trustedLines(page);
+    const rawLines = (page.blocks ?? []).flatMap((block) => block.paragraphs.flatMap((paragraph) => paragraph.lines));
     let section: CandidateSection | null = null;
     let columnsReady = false;
     let marginSectionMarkerCount = 0;
@@ -310,6 +335,22 @@ export function diagnoseBalanceReportOcrCandidates(
     }
     return {
       pageNumber: page.pageNumber,
+      textPresent: page.textPresent ?? null,
+      maskApplied: page.maskApplied ?? null,
+      rawBlockCount: page.blocks?.length ?? 0,
+      rawLineCount: rawLines.length,
+      rawWordCount: rawLines.reduce((count, line) => count + line.words.length, 0),
+      evaluatedNonemptyLineCount: trusted.length,
+      rejectedLineCount: trusted.filter((line) => line.tainted).length,
+      rejectionReasonCounts: {
+        lineConfidence: trusted.filter((line) => line.reasons.lineConfidence).length,
+        wordConfidence: trusted.filter((line) => line.reasons.wordConfidence).length,
+        textControlOrLength: trusted.filter((line) => line.reasons.textControlOrLength).length,
+        lineWordMismatch: trusted.filter((line) => line.reasons.lineWordMismatch).length,
+        geometryOrContainment: trusted.filter((line) => line.reasons.geometryOrContainment).length,
+        reversedReadingOrder: trusted.filter((line) => line.reasons.reversedReadingOrder).length,
+      },
+      rejectionReasonCountsOverlap: true,
       trustedLineCount: trusted.filter((line) => !line.tainted).length,
       marginSectionMarkerCount,
       marginHeaderCount,
