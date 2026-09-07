@@ -57,10 +57,13 @@ function trustedLines(page: OcrCandidatePage): TrustedLine[] {
   const mapped = (page.blocks ?? []).flatMap((block) => block.paragraphs.flatMap((paragraph) => paragraph.lines))
     .filter((line) => line.words.length > 0 || line.text.trim().length > 0)
     .map((line) => {
-      const aggregateText = compact(line.text);
+      // Tesseract GetJSONText appends one LF to each physical line. Treat only
+      // that terminator as framing; embedded controls and word text remain strict.
+      const lineText = line.text.endsWith('\n') ? line.text.slice(0, -1) : line.text;
+      const aggregateText = compact(lineText);
       const wordText = compact(line.words.map((word) => word.text).join(''));
       const lineTrusted = Number.isFinite(line.confidence) && line.confidence >= MIN_WORD_CONFIDENCE
-        && validBox(line.bbox, page.width, page.height) && !FORBIDDEN.test(line.text) && line.text.length <= 500
+        && validBox(line.bbox, page.width, page.height) && !FORBIDDEN.test(lineText) && line.text.length <= 500
         && aggregateText === wordText;
       const words = line.words.filter((word) => Number.isFinite(word.confidence)
         && word.confidence >= MIN_WORD_CONFIDENCE && validBox(word.bbox, page.width, page.height)
