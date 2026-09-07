@@ -24,6 +24,61 @@ function page(pageNumber: number, lines: ReturnType<typeof line>[]): OcrCandidat
 }
 
 describe('SBI balance-report on-device OCR candidates', () => {
+  it('accepts the single trailing LF emitted by Tesseract without mutating OCR evidence', () => {
+    const lines = [
+      line(70, [['国内株式', 100]]),
+      line(90, [['銘柄名', 80], ['数量', 560], ['取得価格', 690], ['買付金額', 860]]),
+      line(120, [['合成株式会社', 80], ['[1234]', 280], ['2024/01/15', 420], ['100株', 560], ['1,000円', 690], ['100,000円', 860]]),
+    ];
+    for (const entry of lines) entry.text += '\n';
+    const input = page(6, lines);
+    const before = structuredClone(input);
+    const candidates = extractBalanceReportOcrCandidates([input]);
+    expect(candidates.domesticStockLots).toHaveLength(1);
+    expect(candidates.domesticStockLots[0]).toMatchObject({ securityCode: '1234', quantity: '100', acquisitionUnitPrice: '1000' });
+    expect(diagnoseBalanceReportOcrCandidates([input], candidates).pages[0].trustedLineCount).toBe(3);
+    expect(input).toEqual(before);
+  });
+
+  it.each([
+    ['embedded LF', '1,000\n円'],
+    ['embedded TAB', '1,000\t円'],
+    ['embedded CR', '1,000\r円'],
+    ['double LF', '1,000円\n\n'],
+    ['CRLF', '1,000円\r\n'],
+    ['bare CR', '1,000円\r'],
+    ['NUL', '1,000円\u0000'],
+    ['bidi control', '1,000円\u202e'],
+  ])('does not admit %s by accepting a line terminator', (_label, malicious) => {
+    const entry = line(120, [['合成株式会社', 80], ['[1234]', 280], ['2024/01/15', 420], ['100株', 560], ['1,000円', 690], ['100,000円', 860]]);
+    entry.text = entry.text.replace('1,000円', malicious) + '\n';
+    const input = page(6, [
+      line(70, [['国内株式', 100]]),
+      line(90, [['銘柄名', 80], ['数量', 560], ['取得価格', 690], ['買付金額', 860]]), entry,
+    ]);
+    expect(extractBalanceReportOcrCandidates([input]).domesticStockLots).toEqual([]);
+    expect(diagnoseBalanceReportOcrCandidates([input], emptyBalanceReportOcrCandidates()).pages[0].trustedLineCount).toBe(2);
+  });
+
+  it.each(['word LF', 'low confidence', 'mismatched text', 'oversize text'])('keeps %s rejected on LF-terminated lines', (kind) => {
+    const entry = line(70, [['信用取引の建玉残高', 100]]);
+    entry.text += '\n';
+    if (kind === 'word LF') entry.words[0].text += '\n';
+    if (kind === 'low confidence') entry.words[0].confidence = 69;
+    if (kind === 'mismatched text') entry.text = '信用取引の建玉残高別紙\n';
+    if (kind === 'oversize text') entry.text = `${' '.repeat(500)}${entry.text}`;
+    const input = page(6, [entry]);
+    expect(diagnoseBalanceReportOcrCandidates([input], emptyBalanceReportOcrCandidates()).pages[0].trustedLineCount).toBe(0);
+  });
+
+  it('recognizes a split-word Japanese section with a real-engine-style terminal LF', () => {
+    const text = '信用取引の建玉残高';
+    const entry = preciseLine(70, Array.from(text).map((character, index) => [character, 50 + index * 25, 20]));
+    entry.text += '\n';
+    const input = page(6, [entry]);
+    expect(diagnoseBalanceReportOcrCandidates([input], emptyBalanceReportOcrCandidates()).pages[0]).toMatchObject({ trustedLineCount: 1, marginSectionMarkerCount: 1 });
+  });
+
   it('never autofills cash or collateral from short OCR labels', () => {
     const candidates = extractBalanceReportOcrCandidates([page(4, [
       line(100, [['預り金', 100], ['0円', 850]]),
