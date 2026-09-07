@@ -3,6 +3,7 @@ import { cleanup } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import SbiBalanceReportClient from '@/app/imports/sbi/balance-report/client';
 import { SbiBrowserOcrDiagnosticError } from '@/import/sbi/browser-ocr';
+import { diagnoseBalanceReportOcrCandidates, emptyBalanceReportOcrCandidates } from '@/import/sbi/balance-report-ocr-candidates';
 
 const safeReport = {
   schemaVersion: 1 as const,
@@ -580,6 +581,10 @@ describe('SBI balance report client', () => {
       throw new SbiBrowserOcrDiagnosticError('ocr-known-label-required', { pages: [{
         pageNumber: 5, trustedLineCount: 12, marginSectionMarkerCount: 1,
         marginHeaderCount: 0, eligibleMarginLineCount: 0, marginCandidateCount: 0,
+        textPresent: null, maskApplied: null, rawBlockCount: 1, rawLineCount: 12, rawWordCount: 12,
+        evaluatedNonemptyLineCount: 12, rejectedLineCount: 0, rejectionReasonCountsOverlap: true,
+        rejectionReasonCounts: { lineConfidence: 0, wordConfidence: 0, textControlOrLength: 0,
+          lineWordMismatch: 0, geometryOrContainment: 0, reversedReadingOrder: 0 },
       }] });
     });
     render(<SbiBalanceReportClient inspectPdf={vi.fn().mockResolvedValue({ ...emptyReport, pageCount: 10 })} runOcr={runOcr} />);
@@ -590,9 +595,48 @@ describe('SBI balance report client', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('この範囲の結果は追加していません');
     expect(screen.queryByRole('progressbar', { name: '日本語OCRの進捗' })).toBeNull();
     expect(screen.queryByRole('link', { name: '診断用JSONを保存（任意）' })).toBeNull();
-    expect(screen.getByRole('heading', { name: 'OCR構造診断（金融値を含みません）' })).toBeTruthy();
-    expect(screen.getByText('5ページ：信頼line 12、exact section 1、header 0、対象row line 0、candidate 0')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'OCR構造診断 v2（金融値を含みません）' })).toBeTruthy();
+    expect(screen.getByText('5ページ：信頼行 12、信用区分見出し 1、列見出し 0、対象行 0、候補 0')).toBeTruthy();
+    expect(screen.getByText('OCR文字列：不明／端末内マスク：不明')).toBeTruthy();
     expect(document.body.textContent).not.toContain('PRIVATE-OCR-CANARY');
+  });
+
+  it.each([
+    [false, false, '文字列・行構造とも未検出です。'],
+    [true, false, '文字列はありますが、行構造は未検出です。'],
+    [true, true, '検出行はありますが、信頼条件で全行が不採用です。'],
+  ])('shows privacy-safe v2 diagnostics on failed OCR with text=%s and rows=%s', async (textPresent, hasRows, explanation) => {
+    const diagnostics = diagnoseBalanceReportOcrCandidates([{
+      pageNumber: 6, width: 1_000, height: 1_400, textPresent, maskApplied: hasRows,
+      blocks: hasRows ? [{ paragraphs: [{ lines: [{
+        text: 'SYNTHETIC-UI-CANARY 987654321円', confidence: 20,
+        bbox: { x0: 0, y0: 70, x1: 1_000, y1: 85 },
+        words: [{ text: 'SYNTHETIC-UI-CANARY 987654321円', confidence: 30,
+          bbox: { x0: 100, y0: 70, x1: 300, y1: 85 } }],
+      }] }] }] : null,
+    }], emptyBalanceReportOcrCandidates());
+    const runOcr = vi.fn().mockRejectedValue(new SbiBrowserOcrDiagnosticError(
+      textPresent ? 'ocr-known-label-required' : 'ocr-text-empty', diagnostics,
+    ));
+    render(<SbiBalanceReportClient inspectPdf={vi.fn().mockResolvedValue({ ...emptyReport, pageCount: 10 })} runOcr={runOcr} />);
+    choose(pdfFile());
+    await screen.findByRole('heading', { name: '端末内の日本語OCR' });
+    fireEvent.change(screen.getByLabelText('開始ページ'), { target: { value: '6' } });
+    fireEvent.change(screen.getByLabelText('終了ページ'), { target: { value: '6' } });
+    fireEvent.click(screen.getByRole('button', { name: '日本語OCRを開始' }));
+    await screen.findByRole('alert');
+    expect(screen.getByRole('heading', { name: 'OCR構造診断 v2（金融値を含みません）' })).toBeTruthy();
+    const region = screen.getByRole('region', { name: 'OCR構造診断 v2（金融値を含みません）' });
+    expect(region.textContent).toContain(explanation);
+    const count = hasRows ? 1 : 0;
+    expect(region.textContent).toContain(`検出ブロック ${count}、検出行 ${count}、検出語 ${count}、評価対象行 ${count}、不採用行 ${count}`);
+    expect(region.textContent).toContain(`OCR文字列：${textPresent ? 'あり' : 'なし'}／端末内マスク：${hasRows ? '適用済み' : '未適用'}`);
+    expect(region.textContent).toContain(`行の信頼度不足・非数値 ${count}、語の信頼度不足・非数値 ${count}`);
+    expect(region.textContent).toContain('文字・制御文字・長さ 0、行と語の不一致 0、座標・包含 0、読み順の逆転 0');
+    expect(region.textContent).toContain('理由は重複して数えます（足し合わせないでください）。');
+    expect(document.body.textContent).not.toMatch(/SYNTHETIC-UI-CANARY|987654321/u);
+    expect(screen.queryByRole('link', { name: '診断用JSONを保存（任意）' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: '取引残高報告書を本人確認して保存' })).toBeNull();
   });
 
   it('accepts a structurally proven OCR candidate when safe text has no known label', async () => {
