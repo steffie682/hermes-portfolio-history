@@ -47,6 +47,7 @@ const versionlessOcrAssetHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  experimental: { cpus: 1 },
   async headers() {
     return [
       {
@@ -80,6 +81,16 @@ const nextConfig: NextConfig = {
           { key: 'X-Content-Type-Options', value: 'nosniff' },
         ],
       },
+      ...['/garden/:path*', '/api/garden/:path*'].map(source => ({
+        source,
+        headers: [
+          { key: 'Content-Security-Policy', value: deviceEnrollmentContentSecurityPolicy },
+          { key: 'Referrer-Policy', value: 'no-referrer' },
+          { key: 'Cache-Control', value: 'private, no-store' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'X-Robots-Tag', value: 'noindex, nofollow' },
+        ],
+      })),
       { source: '/add-device', headers: deviceEnrollmentHeaders },
       { source: '/settings/devices', headers: deviceEnrollmentHeaders },
       {

@@ -1,0 +1,930 @@
+.garden {
+  --paper: #fcfaf7;
+  --surface: #fffefd;
+  --ink: #433b3f;
+  --muted: #756970;
+  --rose: #935c6d;
+  --line: #e9dfdd;
+  --sage: #466957;
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: 206px minmax(0, 1fr);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.garden * {
+  box-sizing: border-box;
+}
+.garden a {
+  color: inherit;
+}
+.garden button,
+.garden select,
+.garden input,
+.garden textarea {
+  font: inherit;
+}
+.garden button,
+.garden select {
+  cursor: pointer;
+}
+.garden button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.garden :focus-visible {
+  outline: 3px solid #8b6179;
+  outline-offset: 3px;
+}
+.sidebar {
+  border-right: 1px solid var(--line);
+  padding: 32px 24px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: #f7f1ed;
+}
+.brand {
+  display: flex;
+  gap: 11px;
+  align-items: center;
+  text-decoration: none;
+  font-family: "Yu Mincho", "Hiragino Mincho ProN", Georgia, serif;
+  font-size: 26px;
+  letter-spacing: 0.08em;
+}
+.brandMark {
+  font-size: 34px;
+  color: var(--rose);
+}
+.brand small {
+  display: block;
+  font-family: Georgia, serif;
+  font-style: italic;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.sidebarLabel {
+  margin: 52px 10px 10px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+}
+.sidebar nav {
+  display: grid;
+  gap: 7px;
+}
+.sidebar nav a {
+  padding: 11px 13px;
+  min-height: 44px;
+  text-decoration: none;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.sidebar nav a:hover {
+  background: #efe4e2;
+}
+.currentNav {
+  background: #eee0e1;
+  color: #7d4658 !important;
+  font-weight: 700;
+}
+.sideBottom {
+  margin-top: auto;
+  padding-top: 70px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+.sideBottom > span {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+.sprig {
+  width: 90px;
+  height: 130px;
+  color: #b29a94;
+}
+.main {
+  width: 100%;
+  max-width: 1450px;
+  padding: 36px 40px 24px;
+  margin: auto;
+}
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 26px;
+}
+.overline {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  color: var(--rose);
+  margin: 0 0 9px;
+}
+.header h1 {
+  font-family: "Yu Mincho", "Hiragino Mincho ProN", Georgia, serif;
+  font-size: clamp(22px, 2.5vw, 30px);
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.header h1 span {
+  color: #b49578;
+  font-size: 23px;
+}
+.header p:last-child {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 7px 0 0;
+}
+.headerRight {
+  display: grid;
+  justify-items: end;
+  gap: 9px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.privacy {
+  border: 1px solid #d9cbcb;
+  color: var(--rose);
+  letter-spacing: 0.15em;
+  font-size: 9px;
+  padding: 3px 10px;
+  border-radius: 4px;
+}
+.summary {
+  display: grid;
+  grid-template-columns: 1.3fr 1.2fr 0.8fr;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.summary > div {
+  padding: 24px 27px;
+  min-width: 0;
+}
+.summary > div + div {
+  border-left: 1px solid var(--line);
+}
+.summary span {
+  font-size: 12px;
+  color: var(--muted);
+}
+.summary strong {
+  display: block;
+  white-space: nowrap;
+  font-family: Georgia, "Yu Mincho", serif;
+  font-size: 36px;
+  font-weight: 400;
+  letter-spacing: -0.025em;
+  line-height: 1.3;
+  margin: 9px 0;
+}
+.summary p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.summary strong small {
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+.mainMetric > p:last-child {
+  margin-top: 12px;
+}
+.mainMetric > p:last-child span {
+  font-size: 11px;
+  color: inherit;
+  margin-left: 7px;
+}
+.dividendMetric {
+  background: #faf3f2;
+}
+.dividendMetric > span {
+  display: flex;
+  justify-content: space-between;
+}
+.dividendMetric i {
+  font-size: 22px;
+  line-height: 16px;
+  font-style: normal;
+  color: #ad7a86;
+}
+.dividendMetric strong {
+  color: #845363;
+}
+.yield {
+  display: flex;
+  justify-content: space-between;
+  border-top: 1px solid #e9d9dc;
+  margin-top: 13px;
+  padding-top: 8px;
+}
+.yield b {
+  color: #845363;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+.noteMetric strong {
+  font-size: 28px;
+}
+.noteMetric p:last-child {
+  font-family: "Yu Mincho", serif;
+  font-size: 13px;
+  margin-top: 14px;
+}
+.gain {
+  color: #456954 !important;
+}
+.loss {
+  color: #a34450 !important;
+}
+.warning {
+  background: #fff6df;
+  color: #735822;
+  padding: 10px 14px;
+  border: 1px solid #e4d8b7;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 20px 0;
+}
+.actions button,
+.formActions button {
+  min-height: 44px;
+  padding: 9px 17px;
+  border: 1px solid #cdbabc;
+  background: #fffdfb;
+  color: #714b58;
+  border-radius: 7px;
+}
+.actions button:first-child,
+.formActions button[type="submit"] {
+  background: #88566a;
+  color: #fff;
+  border-color: #88566a;
+}
+.actions > span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.contentGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 26px;
+  margin-top: 26px;
+}
+.holdings {
+  min-width: 0;
+}
+.sectionTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 15px;
+}
+.garden h2 {
+  font-family: "Yu Mincho", "Hiragino Mincho ProN", serif;
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+  margin: 0;
+}
+.sort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.sort select {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 12px;
+  min-height: 36px;
+  padding: 3px 8px;
+  max-width: 165px;
+}
+.tabs {
+  display: flex;
+  gap: 24px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 1px;
+}
+.tabs button {
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 10px 2px 12px;
+  min-height: 44px;
+}
+.tabs button[aria-pressed="true"] {
+  color: var(--rose);
+  border-color: var(--rose);
+  font-weight: 700;
+}
+.lot {
+  border-bottom: 1px solid var(--line);
+  padding: 22px 0 14px;
+}
+.lotHeading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+.lotHeading p {
+  margin: 0 0 5px;
+}
+.code {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+}
+.account {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 1.7;
+  color: #6c6c5b;
+  border: 1px solid #dadbce;
+  border-radius: 4px;
+  padding: 0 6px;
+  margin-left: 10px;
+}
+.lotHeading h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.lotRight {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.lotRight b {
+  font-size: 18px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.lotRight small {
+  font-size: 11px;
+}
+.lotRight button {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--rose);
+  font-size: 12px;
+  text-decoration: underline;
+}
+.lotNumbers {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+.lotNumbers > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.lotNumbers span {
+  font-size: 10px;
+  color: var(--muted);
+}
+.lotNumbers b {
+  font-weight: 500;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.lotNumbers small {
+  font-size: 10px;
+  color: var(--muted);
+}
+.details {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.details summary {
+  min-height: 32px;
+  padding-top: 5px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.details > p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 12px 0;
+}
+.details dl {
+  border: 0;
+}
+.details dl > div {
+  padding: 6px 0;
+  border: 0;
+  gap: 12px;
+}
+.details dt,
+.details dd {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.details dd {
+  text-align: right;
+}
+.source {
+  font-size: 10px;
+}
+.rightColumn {
+  border-left: 1px solid var(--line);
+  padding-left: 25px;
+  min-width: 0;
+}
+.allocation > p {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 6px 0;
+}
+.donut {
+  width: 142px;
+  height: 142px;
+  border-radius: 50%;
+  margin: 23px auto;
+  display: grid;
+  place-items: center;
+}
+.donut > div {
+  width: 110px;
+  height: 110px;
+  border-radius: 50%;
+  background: var(--paper);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+.donut b {
+  font:
+    30px Georgia,
+    serif;
+}
+.donut span {
+  font-size: 10px;
+  color: var(--muted);
+}
+.allocation ul {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+.allocation li {
+  display: grid;
+  grid-template-columns: 6px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+}
+.allocation li > span:first-child {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.allocation li > span:nth-child(2) {
+  overflow-wrap: anywhere;
+}
+.allocation li b {
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.allocation li small {
+  display: block;
+  font-size: 9px;
+  color: var(--muted);
+}
+.allocationEmpty {
+  padding: 40px 0;
+  text-align: center;
+}
+.readingNote {
+  margin-top: 30px;
+  border-top: 1px solid var(--line);
+  padding-top: 22px;
+}
+.readingNote > span {
+  color: #b39476;
+  font-size: 22px;
+}
+.readingNote h2 {
+  font-size: 15px;
+  margin: 7px 0 14px;
+}
+.readingNote p {
+  font-size: 11px;
+  line-height: 1.9;
+  color: var(--muted);
+}
+.footer {
+  margin-top: 34px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.footer p {
+  margin: 6px 0;
+}
+.footer a {
+  display: inline-block;
+  min-height: 36px;
+  padding-top: 7px;
+}
+.demoBanner {
+  background: #f0e5e8;
+  color: #74485c;
+  padding: 10px 15px;
+  border: 1px solid #dbc5ce;
+  font-size: 12px;
+  border-radius: 7px;
+  margin-bottom: 23px;
+}
+.empty {
+  text-align: center;
+  padding: 35px 15px;
+}
+.empty .sprig {
+  height: 90px;
+}
+.empty h3 {
+  font-weight: 500;
+  font-size: 16px;
+}
+.empty p {
+  font-size: 12px;
+  color: var(--muted);
+}
+.editor {
+  border: 1px solid #d8c3ca;
+  background: #fffaf8;
+  border-radius: 10px;
+  padding: 22px;
+  margin: 18px 0;
+}
+.editor h2 {
+  margin-bottom: 9px;
+}
+.editor > p {
+  font-size: 12px;
+  color: var(--muted);
+}
+.fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 15px;
+  margin: 18px 0;
+}
+.fields label {
+  font-size: 12px;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+.fields input,
+.fields select,
+.fields textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #cdbfc2;
+  border-radius: 5px;
+  min-height: 44px;
+  padding: 8px 10px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 16px;
+}
+.fields small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.wideField {
+  grid-column: 1/-1;
+}
+.fields textarea {
+  min-height: 85px;
+}
+.formActions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+.formActions .delete {
+  margin-left: auto;
+  color: #9d3d48;
+  background: transparent;
+  border-color: #d6aeb6;
+}
+.notice {
+  width: 100%;
+  font-size: 12px !important;
+  color: var(--sage) !important;
+}
+.error {
+  color: #9d3d48 !important;
+  width: 100%;
+  font-size: 12px;
+}
+.editor details > summary {
+  cursor: pointer;
+  min-height: 44px;
+  padding: 12px 0;
+  font-size: 13px;
+}
+.confirm {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  align-items: flex-start;
+}
+.confirm input {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.subnote {
+  font-size: 11px !important;
+  line-height: 1.8;
+  color: var(--muted);
+}
+@media (min-width: 1500px) {
+  .main {
+    padding: 42px 55px;
+  }
+  .contentGrid {
+    grid-template-columns: minmax(0, 1fr) 285px;
+  }
+}
+@media (max-width: 1180px) {
+  .garden {
+    grid-template-columns: 170px minmax(0, 1fr);
+  }
+  .sidebar {
+    padding: 28px 15px;
+  }
+  .main {
+    padding: 28px 24px;
+  }
+  .contentGrid {
+    grid-template-columns: minmax(0, 1fr) 210px;
+    gap: 20px;
+  }
+  .rightColumn {
+    padding-left: 19px;
+  }
+  .summary > div {
+    padding: 20px;
+  }
+  .summary strong {
+    font-size: 30px;
+  }
+  .lotNumbers {
+    gap: 9px;
+  }
+  .lotNumbers b {
+    font-size: 12px;
+  }
+}
+@media (max-width: 940px) {
+  .garden {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    padding: 14px 24px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+  }
+  .brand {
+    font-size: 21px;
+  }
+  .brandMark {
+    font-size: 27px;
+  }
+  .brand small {
+    font-size: 9px;
+  }
+  .sidebarLabel,
+  .sideBottom {
+    display: none;
+  }
+  .sidebar nav {
+    display: flex;
+    gap: 6px;
+  }
+  .sidebar nav a {
+    font-size: 11px;
+    padding: 10px;
+  }
+  .main {
+    padding: 25px 24px;
+  }
+  .contentGrid {
+    grid-template-columns: minmax(0, 1fr) 220px;
+  }
+  .summary strong {
+    font-size: 30px;
+  }
+}
+@media (max-width: 700px) {
+  .sidebar {
+    padding: 12px 17px;
+  }
+  .sidebar nav a:not(:first-child) {
+    display: none;
+  }
+  .main {
+    padding: 22px 17px;
+  }
+  .header {
+    align-items: flex-start;
+    margin-bottom: 20px;
+  }
+  .header h1 {
+    font-size: 21px;
+  }
+  .header h1 span {
+    font-size: 17px;
+  }
+  .headerRight {
+    font-size: 9px;
+    max-width: 100px;
+    text-align: right;
+  }
+  .header p:last-child {
+    font-size: 11px;
+  }
+  .overline {
+    font-size: 8px;
+  }
+  .summary {
+    grid-template-columns: 1fr 1fr;
+    border-radius: 10px;
+  }
+  .summary > div {
+    padding: 18px 15px;
+  }
+  .summary strong {
+    font-size: 25px;
+  }
+  .summary span,
+  .summary p {
+    font-size: 10px;
+  }
+  .summary .noteMetric {
+    display: none;
+  }
+  .summary strong small {
+    font-size: 10px;
+  }
+  .mainMetric > p:last-child span {
+    display: block;
+    margin: 2px 0;
+  }
+  .contentGrid {
+    grid-template-columns: 1fr;
+    gap: 28px;
+    margin-top: 22px;
+  }
+  .rightColumn {
+    border-left: 0;
+    padding-left: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 22px;
+    border-top: 1px solid var(--line);
+    padding-top: 24px;
+  }
+  .readingNote {
+    margin: 0;
+    border-top: 0;
+    padding-top: 0;
+  }
+  .sectionTop h2 {
+    font-size: 17px;
+  }
+  .sort {
+    font-size: 10px;
+  }
+  .sort select {
+    max-width: 135px;
+    font-size: 11px;
+  }
+  .lotNumbers {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 15px 8px;
+  }
+  .lotNumbers > div:nth-child(4),
+  .lotNumbers > div:nth-child(5) {
+    padding-top: 8px;
+    border-top: 1px dotted var(--line);
+  }
+  .lotNumbers b {
+    font-size: 14px;
+  }
+  .lotHeading h3 {
+    font-size: 14px;
+  }
+  .fields {
+    grid-template-columns: 1fr 1fr;
+  }
+  .editor {
+    padding: 18px 14px;
+  }
+  .demoBanner {
+    font-size: 10px;
+  }
+  .actions {
+    gap: 8px;
+  }
+  .actions button {
+    font-size: 12px;
+    padding: 9px 12px;
+  }
+  .donut {
+    width: 122px;
+    height: 122px;
+  }
+  .donut > div {
+    width: 93px;
+    height: 93px;
+  }
+  .allocation li {
+    font-size: 10px;
+  }
+  .allocation li b {
+    font-size: 10px;
+  }
+  .garden h2 {
+    font-size: 16px;
+  }
+}
+@media (max-width: 370px) {
+  .header h1 {
+    font-size: 18px;
+  }
+  .summary strong {
+    font-size: 22px;
+  }
+  .summary > div {
+    padding: 16px 11px;
+  }
+  .rightColumn {
+    grid-template-columns: 1fr;
+  }
+  .readingNote {
+    border-top: 1px solid var(--line);
+    padding-top: 18px;
+  }
+  .fields {
+    grid-template-columns: 1fr;
+  }
+  .lotNumbers b {
+    font-size: 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .garden * {
+    scroll-behavior: auto !important;
+    transition: none !important;
+  }
+}
